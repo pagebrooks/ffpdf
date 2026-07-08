@@ -1,0 +1,10 @@
+ffpdf
+test_field_map
+*.o
+fuzz_harness
+fuzz-findings/
+FUTURE_WORK.md
+filled.pdf
+answers.fdf
+out/
+row.fdf

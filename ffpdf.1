@@ -1,0 +1,264 @@
+.\" Manual page for ffpdf.
+.\" SPDX-License-Identifier: Apache-2.0
+.\" Copyright (C) 2026 Page Brooks
+.TH FFPDF 1 "July 2026" "ffpdf 0.1.0" "User Commands"
+.SH NAME
+ffpdf \- extract and fill PDF form fields
+.SH SYNOPSIS
+.B ffpdf
+.B fdf-extract
+.I pdf
+.br
+.B ffpdf
+.B xfdf-extract
+.I pdf
+.br
+.B ffpdf
+.B fill
+.RB [ \-f | \-\-flatten ]
+.RB [ \-o
+.IR file ]
+.RB [ \-\- ]
+.I fdf pdf
+.br
+.B ffpdf
+.B xref
+.I pdf
+.br
+.B ffpdf
+.RB { help | version }
+.SH DESCRIPTION
+.B ffpdf
+is a small, fast command-line tool for reading and filling PDF
+.B AcroForm
+form fields. It is written in C and depends only on
+.BR zlib :
+no Java, no external PDF toolkit, and no headless browser.
+.PP
+The typical loop is
+.BR discover " \(-> " edit " \(-> " fill :
+list a form's fields with
+.BR "ffpdf fdf-extract" ,
+edit the resulting FDF to set the values you want, then produce a filled PDF
+with
+.BR "ffpdf fill" .
+.PP
+Every command writes its result to
+.BR "standard output" ;
+progress messages and warnings go to
+.B standard error
+so they never corrupt the output stream. Fills are written as PDF
+.I incremental updates:
+the original bytes are preserved verbatim and the changes are appended,
+so nothing existing is rewritten.
+.SH COMMANDS
+Exactly one command must be given.
+.TP
+.BI fdf-extract " pdf"
+Extract every fillable (terminal) form field of
+.I pdf
+and print them as an
+.B FDF
+document on standard output. Each field appears as a
+.RB \(dq "/T (name) /V (value)" \(dq
+entry; the
+.B /T
+is the fully\-qualified field name you fill by.
+.TP
+.BI xfdf-extract " pdf"
+As
+.BR fdf-extract ,
+but emit the field list as an
+.B XFDF
+(XML) document instead.
+.TP
+.BI fill " \fR[\fP\-f\fR|\fP\-\-flatten\fR] [\fP\-o \fIfile\fR] [\fP\-\-\fR]\fP fdf pdf"
+Fill
+.I pdf
+using the values in
+.IR fdf ,
+writing the resulting PDF to standard output. Note the argument order:
+the
+.B FDF
+comes first, then the
+.BR PDF .
+.I fdf
+may be
+.B \-
+to read the FDF from standard input.
+The tool selects each field's correct type behaviour (checkbox on\-state,
+choice selection index, text appearance) and, for forms carrying an XFA data
+packet, keeps that packet in sync so viewers that render XFA show the values.
+As a safety net,
+.B fill
+refuses to write PDF bytes to a terminal; redirect the output or use
+.BR \-o .
+.IP
+With
+.B \-\-flatten
+(or
+.BR \-f ),
+the result is additionally
+.I flattened:
+the filled values are baked into the page content and the interactive form
+(widget annotations, the AcroForm, and any XFA packet) is removed, producing a
+non\-editable PDF. Useful for archival or distribution when the values should no
+longer be changed.
+.IP
+With
+.BI \-o " file"
+(or
+.BR \-\-output ),
+the PDF is written to
+.I file
+instead of standard output,
+.IR atomically :
+the output is assembled as
+.IB file .tmp
+and renamed into place only on success, so a failed or interrupted fill never
+leaves a partial
+.IR file .
+.RB \(dq "\-o \-" \(dq
+means standard output explicitly.
+.IP
+.B \-\-
+ends option parsing, for file names that begin with
+.RB \(dq \- \(dq.
+The extraction and
+.B xref
+commands accept it too.
+.TP
+.BI xref " pdf"
+Parse the cross\-reference table of
+.I pdf
+and dump it as JSON. This is a debugging and inspection aid, not part of the
+fill workflow.
+.TP
+.B help
+Print a usage summary to standard output and exit successfully.
+Also accepted as
+.B \-h
+or
+.BR \-\-help .
+.TP
+.B version
+Print version and license information and exit successfully.
+Also accepted as
+.B \-v
+or
+.BR \-\-version .
+.SH "FIELD TYPES"
+All four AcroForm field types are handled:
+.BR text ,
+.B button
+(checkbox / radio; values such as
+.BR Yes ,
+.BR On ,
+or
+.B 1
+map to the widget's real on\-state),
+.B choice
+(combo box and list box, single or multi\-select), and
+.B signature
+(left untouched; a signature is not a fillable value). Non\-ASCII text
+values are written as UTF\-16.
+.SH ENVIRONMENT
+.TP
+.B FFPDF_VERBOSE
+When set to
+.BR 1 ,
+filled values are included in the progress log on standard error. They are
+redacted by default because form values may be sensitive (PHI/PII).
+.TP
+.B PDF_MAX_DECOMPRESSED
+Maximum size of any single decompressed stream (default 256 MB). A stream that
+would exceed this is treated as corrupt and skipped.
+.TP
+.B PDF_MAX_TOTAL_DECOMPRESSED
+Maximum total decompressed bytes over one run (default 1 GB).
+.SH "EXIT STATUS"
+.TP
+.B 0
+Success.
+.TP
+.B 1
+An error occurred: invalid usage, a file that could not be opened, or a PDF
+whose cross\-reference table could not be parsed.
+.SH EXAMPLES
+List the fields of a form:
+.PP
+.RS
+.EX
+ffpdf fdf-extract form.pdf
+.EE
+.RE
+.PP
+Fill a form and save the result:
+.PP
+.RS
+.EX
+ffpdf fill answers.fdf form.pdf > filled.pdf
+.EE
+.RE
+.PP
+Fill and flatten to a non-editable PDF, written atomically with \-o:
+.PP
+.RS
+.EX
+ffpdf fill \-\-flatten \-o final.pdf answers.fdf form.pdf
+.EE
+.RE
+.PP
+Mail merge: pipe a templated FDF straight in (no temp file):
+.PP
+.RS
+.EX
+envsubst < template.fdf | ffpdf fill \-o out.pdf \- form.pdf
+.EE
+.RE
+.PP
+A minimal
+.I answers.fdf
+setting two fields:
+.PP
+.RS
+.EX
+%FDF\-1.2
+1 0 obj
+<< /FDF << /Fields [
+  << /T (applicant_name) /V (Ada Lovelace) >>
+  << /T (agree) /V (Yes) >>
+] >> >>
+endobj
+trailer
+<< /Root 1 0 R >>
+%%EOF
+.EE
+.RE
+.SH LIMITATIONS
+Only the empty user password is supported for encrypted PDFs; files that
+require a real password are not opened (by design; this is not a password
+cracker).
+.PP
+Field extraction reads the AcroForm field tree. Purely
+.I dynamic XFA
+forms (for example many USCIS forms) keep their fields only in the XFA
+template, not the AcroForm tree; for those,
+.B fdf-extract
+and
+.B xfdf-extract
+find nothing to extract.
+.SH "SEE ALSO"
+The
+.B README.md
+shipped with the source for a fuller guide, and ISO 32000\-1 (PDF) plus the
+Adobe FDF/XFDF specifications for the underlying formats.
+.SH AUTHOR
+Written by Page Brooks.
+.SH COPYRIGHT
+Copyright \(co 2026 Page Brooks.
+License Apache\-2.0: Apache License, Version 2.0
+<https://www.apache.org/licenses/LICENSE\-2.0>.
+.br
+This is free software: you are free to change and redistribute it. There is NO
+WARRANTY, to the extent permitted by law.

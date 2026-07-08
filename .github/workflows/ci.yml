@@ -1,0 +1,207 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: write        # attach release assets on tags + rolling "latest" release
+  id-token: write        # sigstore keyless signing for attestations
+  attestations: write    # store provenance + SBOM attestations
+
+jobs:
+  build:
+    name: build & test (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Artifacts are archives (not bare binaries) so every download carries
+          # LICENSE/NOTICE (the Apache-2.0 warranty disclaimer + trademark
+          # notice) and the man page alongside the binary.
+          - name: linux
+            os: ubuntu-latest
+            artifact: ffpdf-linux-x86_64.tar.gz
+          - name: macos
+            os: macos-latest
+            artifact: ffpdf-macos.tar.gz
+          - name: windows
+            os: windows-latest
+            artifact: ffpdf-windows-x86_64.zip
+    steps:
+      - uses: actions/checkout@v7
+
+      # ---- Linux: gcc + system zlib ----
+      - name: Install deps (Linux)
+        if: matrix.name == 'linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y zlib1g-dev
+          pip3 install --quiet pikepdf   # exercises the flatten + encryption e2e tests
+      - name: Build & test (Linux)
+        if: matrix.name == 'linux'
+        run: |
+          make check WERROR=1
+          make sbom SBOM_OUT="sbom-${{ matrix.name }}.json"
+          mkdir pkg && cp ffpdf LICENSE NOTICE README.md ffpdf.1 pkg/
+          tar -czf "${{ matrix.artifact }}" -C pkg .
+
+      # ---- macOS: clang + system zlib (bash + python3 preinstalled) ----
+      - name: Install deps (macOS)
+        if: matrix.name == 'macos'
+        # --break-system-packages: runner python is Homebrew-managed (PEP 668);
+        # fine on an ephemeral CI machine
+        run: pip3 install --quiet --break-system-packages pikepdf
+      - name: Build & test (macOS)
+        if: matrix.name == 'macos'
+        run: |
+          make check CC=clang WERROR=1
+          make sbom CC=clang SBOM_OUT="sbom-${{ matrix.name }}.json"
+          mkdir pkg && cp ffpdf LICENSE NOTICE README.md ffpdf.1 pkg/
+          tar -czf "${{ matrix.artifact }}" -C pkg .
+
+      # ---- Windows: MSYS2 / MinGW-w64 gcc + zlib, static self-contained .exe ----
+      - name: Set up MSYS2 (Windows)
+        if: matrix.name == 'windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-zlib
+            make
+            python
+            zip
+            mingw-w64-x86_64-python-pikepdf
+      - name: Build & test (Windows)
+        if: matrix.name == 'windows'
+        shell: msys2 {0}
+        run: |
+          make check STATIC=1 WERROR=1
+          make sbom STATIC=1 SBOM_OUT="sbom-${{ matrix.name }}.json"
+          ./ffpdf.exe --version
+          # confirm it is self-contained (no non-system DLL dependencies)
+          ldd ffpdf.exe || true
+          # .txt extensions so LICENSE/NOTICE open on double-click on Windows
+          mkdir pkg && cp ffpdf.exe README.md ffpdf.1 pkg/
+          cp LICENSE pkg/LICENSE.txt && cp NOTICE pkg/NOTICE.txt
+          (cd pkg && zip -q "../${{ matrix.artifact }}" ./*)
+
+      - name: Checksum
+        shell: bash
+        run: |
+          A="${{ matrix.artifact }}"
+          if command -v sha256sum >/dev/null; then sha256sum "$A" > "$A.sha256";
+          else shasum -a 256 "$A" > "$A.sha256"; fi
+          cat "$A.sha256"
+
+      # Keyless (sigstore) attestations: provenance proves the binary was built
+      # by this workflow at this commit; the SBOM attestation binds the
+      # per-platform SBOM to the binary's digest. Only for builds that get
+      # published (main + tags) — verify with:
+      #   gh attestation verify <file> -R pagebrooks/ffpdf
+      # GitHub doesn't support attestations on user-owned private repos, so
+      # they're skipped while private and kick in automatically once public.
+      - name: Attest build provenance
+        if: >-
+          github.event_name == 'push' &&
+          (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) &&
+          !github.event.repository.private
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: ${{ matrix.artifact }}
+
+      - name: Attest SBOM
+        if: >-
+          github.event_name == 'push' &&
+          (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) &&
+          !github.event.repository.private
+        uses: actions/attest@v4
+        with:
+          subject-path: ${{ matrix.artifact }}
+          sbom-path: sbom-${{ matrix.name }}.json
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            ${{ matrix.artifact }}
+            ${{ matrix.artifact }}.sha256
+            sbom-${{ matrix.name }}.json
+
+      - name: Attach binary + checksum + SBOM to release (on tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            ${{ matrix.artifact }}
+            ${{ matrix.artifact }}.sha256
+            sbom-${{ matrix.name }}.json
+
+  latest-release:
+    name: publish rolling "latest" prerelease
+    # Every green push to main refreshes a single prerelease tagged `latest`.
+    # Version tags (v*) remain the path for permanent releases (handled above).
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [build, sanitizers]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Recreate the `latest` release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Delete + recreate (rather than edit) so the `latest` tag moves to the
+        # commit that was actually built.
+        run: |
+          gh release delete latest --cleanup-tag --yes || true
+          gh release create latest \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "Continuous build (main @ ${GITHUB_SHA::7})" \
+            --notes "Automated build of \`main\` at ${GITHUB_SHA}. Refreshed on every push to main; for stable downloads use a versioned release. Each archive bundles the binary with LICENSE, NOTICE, README, and the man page, and carries a sigstore attestation: \`gh attestation verify <file> -R ${GITHUB_REPOSITORY}\`." \
+            dist/*
+
+  shellcheck:
+    name: shellcheck (test + fuzz scripts)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # -S warning: gate on real problems; style/info notes don't fail the build
+      - run: shellcheck -S warning test_e2e.sh fuzz.sh
+
+  reproducible:
+    name: reproducible build
+    # docs/SECURITY-PRIVACY.md tells reviewers the build is reproducible; keep
+    # that claim tested by building twice from clean and comparing bytes.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: sudo apt-get update && sudo apt-get install -y zlib1g-dev
+      - name: Build twice and compare
+        run: |
+          make WERROR=1
+          cp ffpdf ffpdf.first
+          make rebuild WERROR=1
+          cmp ffpdf ffpdf.first
+          echo "builds are byte-identical"
+
+  sanitizers:
+    name: sanitizers (ASan/UBSan) + fuzz
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: sudo apt-get update && sudo apt-get install -y zlib1g-dev
+      - name: Best-effort pikepdf (for encrypted e2e + fuzz seeds)
+        run: pip3 install --quiet pikepdf || true
+      - name: Build with ASan+UBSan and run the test suite
+        run: |
+          make asan
+          ASAN_OPTIONS=detect_leaks=0 ./test_e2e.sh
+      - name: Short fuzz (ASan/UBSan, read + fill + encrypted)
+        run: make fuzz_harness && ./fuzz.sh 5000

@@ -1,0 +1,42 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '17 7 * * 1'   # weekly re-scan: new CodeQL queries against unchanged code
+
+permissions:
+  contents: read
+  security-events: write   # upload findings to the Security tab
+
+jobs:
+  analyze:
+    name: analyze (C)
+    runs-on: ubuntu-latest
+    # Code scanning is not available on user-owned private repos (same as
+    # attestations); skipped while private, kicks in automatically once public.
+    if: ${{ !github.event.repository.private }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: c-cpp
+          build-mode: manual
+          # security-extended: broader security queries than the default suite;
+          # right bar for a parser that eats untrusted input.
+          queries: security-extended
+
+      - name: Build
+        run: |
+          sudo apt-get update && sudo apt-get install -y zlib1g-dev
+          make WERROR=1
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: '/language:c-cpp'

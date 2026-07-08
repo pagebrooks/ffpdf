@@ -1,0 +1,22 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "metadata": {
+    "component": {
+      "type": "application",
+      "name": "ffpdf",
+      "version": "0.1.0",
+      "description": "Fast PDF form-field extractor and filler.",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }]
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "name": "zlib",
+      "purl": "pkg:generic/zlib",
+      "description": "DEFLATE compression library; the only runtime dependency. The exact version is the one provided by the build environment (system libz, MinGW zlib, or a vendored copy).",
+      "licenses": [{ "license": { "id": "Zlib" } }]
+    }
+  ]
+}

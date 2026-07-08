@@ -1,0 +1,13 @@
+version: 2
+updates:
+  # The only dependency ecosystem here is the workflows themselves: zlib comes
+  # from the system/MSYS2, not a manifest, so there is nothing else to track.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      # One PR covering all action bumps instead of one PR per action.
+      actions:
+        patterns: ["*"]

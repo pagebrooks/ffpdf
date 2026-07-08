@@ -1,0 +1,18 @@
+ffpdf
+Copyright 2026 Page Brooks
+
+This product includes software developed by Page Brooks.
+
+Licensed under the Apache License, Version 2.0 (see the LICENSE file).
+
+"ffpdf" and the ffpdf name and logo are trademarks of
+Page Brooks. The Apache-2.0 license grants rights to the software but
+does not grant permission to use these marks, except as required for 
+reasonable and customary use in describing the origin of the work 
+(Apache-2.0, section 6).
+
+---
+
+This software depends at runtime on zlib (https://zlib.net/), which is
+distributed under the zlib license and is not included in this source
+distribution.
