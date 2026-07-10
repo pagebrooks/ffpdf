@@ -197,15 +197,37 @@ $ echo $?
 
 Exit codes: **0** success · **1** bad usage or unreadable PDF · **2** nothing matched (no output) · **3** `--strict` and some field didn't match.
 
-**Filling from JSON (no FDF).** The `<values>` file can be a JSON object in the same shape `fields` emits — `{ "FieldName": "value", "Multi": ["a", "b"], "Box": true }` — auto-detected, so an agent can close the discover-then-fill loop in one format without ever authoring FDF:
+**Filling from JSON (no FDF).** The `<values>` file can be a JSON object in the same shape `fields` emits, auto-detected, so an agent can close the discover-then-fill loop in one format without ever authoring FDF. Each key is a field's `name` (exactly as `fields` reports it), and the value's *type* says how to fill it:
+
+```json
+{
+  "FullName": "Avery Whitfield",
+  "State": "NH",
+  "Zip": 3801,
+  "CoverageType": "Home",
+  "AdditionalCoverages": ["Flood", "Identity theft"],
+  "PaperlessBilling": true,
+  "Email": null
+}
+```
+
+| JSON value | Fills |
+|---|---|
+| **string** | a text or choice field (`"State": "NH"`) |
+| **array of strings** | a multi-select list box (`["Flood", "Identity theft"]`) |
+| **number** | used verbatim as text — handy for ZIPs and IDs (`3801` → `"3801"`) |
+| **`true` / `false`** | checks / clears a checkbox (mapped to its real on-state) |
+| **`null`** | skipped — the field is left as-is |
+
+The whole discover → fill → verify loop stays in JSON:
 
 ```console
-$ ffpdf fields form.pdf > fields.json     # discover
+$ ffpdf fields form.pdf > fields.json     # discover names, types, options
 $ # ... produce values.json from fields.json ...
 $ ffpdf fill --json --strict -o out.pdf form.pdf values.json   # fill + verify
 ```
 
-A string fills a text or choice field, an array fills a multi-select, a number is used verbatim, and a boolean checks (`true`) or clears (`false`) a checkbox. (`values.json` may be `-` to read from stdin.) A value longer than a text field's `/MaxLen` is truncated to fit, with a warning (and is listed under `truncated` in the `--json` result).
+`values.json` may be `-` to read from stdin. String values are UTF-8 (or `\uXXXX` escapes), so `"Zoë 😀"` round-trips correctly. A value longer than a text field's `/MaxLen` is truncated to fit, with a warning (and is listed under `truncated` in the `--json` result).
 
 ---
 

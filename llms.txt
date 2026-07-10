@@ -12,11 +12,15 @@ on-states, and document xfa/dynamic_xfa flags). `ffpdf fill form.pdf
 values.json > out.pdf` fills a form from a values file. The values file may be
 an FDF or a JSON object (the same shape `fields` emits, so agents never author
 FDF), auto-detected; the PDF and values may be in either order, and the values
-may be `-` for stdin. JSON values: string, array (multi-select), number, or
-boolean (check/clear a box). `-o FILE` writes atomically; `--flatten` bakes
-values in and removes the form; `--json` writes a JSON result (updated/not_found
-fields) to stdout; `--strict` exits 3 if any value did not match a field. Exit codes: 0 success, 1 error, 2 nothing matched (no output written), 3 --strict partial mismatch. Exit code 0 on success, 1 on error; diagnostics go to
-stderr, output to stdout.
+may be `-` for stdin. The JSON is a flat object keyed by field name; the value
+type says how to fill it: string (text/choice), array of strings (multi-select),
+number (verbatim), boolean (check/clear a checkbox), null (skip). Example:
+`{"State": "NH", "Coverages": ["Flood","Fire"], "Paperless": true, "Zip": 3801}`.
+`-o FILE` writes atomically; `--flatten` bakes values in and removes the form;
+`--json` writes a JSON result (updated/not_found/truncated fields) to stdout;
+`--strict` exits 3 if any value did not match a field. Exit codes: 0 success,
+1 error, 2 nothing matched (no output written), 3 --strict partial mismatch.
+Diagnostics go to stderr, output to stdout.
 
 Install: download a static binary archive from
 https://github.com/pagebrooks/ffpdf/releases (Linux, macOS, Windows), or

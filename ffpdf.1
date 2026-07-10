@@ -298,6 +298,31 @@ envsubst < template.fdf | ffpdf fill \-o out.pdf form.pdf \-
 .EE
 .RE
 .PP
+Fill from a JSON values object (the shape
+.B fields
+produces):
+.PP
+.RS
+.EX
+ffpdf fill \-o out.pdf form.pdf values.json
+.EE
+.RE
+.PP
+where
+.I values.json
+is a flat object keyed by field name, e.g.:
+.PP
+.RS
+.EX
+{
+  "applicant_name": "Ada Lovelace",
+  "coverages": ["Flood", "Fire"],
+  "zip": 94043,
+  "agree": true
+}
+.EE
+.RE
+.PP
 A minimal
 .I answers.fdf
 setting two fields:
