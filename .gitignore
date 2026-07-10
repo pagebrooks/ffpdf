@@ -9,3 +9,4 @@ answers.fdf
 values.json
 out/
 row.fdf
+sbom.gen.json

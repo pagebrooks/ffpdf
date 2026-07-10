@@ -30,7 +30,7 @@
 extern long find_startxref(FILE *f);
 
 #define PROG_NAME    "ffpdf"
-#define PROG_VERSION "0.1.0"
+#define PROG_VERSION "0.1.1"
 
 // Program name as invoked (without any directory), for diagnostics.
 static const char *prog_basename(const char *p) {
