@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `fields` command: list every fillable field as JSON, with names, types,
+  current values (UTF-16 values decoded to UTF-8), choice options and
+  combo/multi-select flags, and checkbox on-state names. A machine-readable
+  companion to `fdf-extract` for scripts and AI agents.
+
 ### Fixed
 
 - ffpdf can now re-read PDFs it filled. Streams without a `/Filter` (legal

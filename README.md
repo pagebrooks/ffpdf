@@ -170,6 +170,7 @@ Two practical notes:
 |---|---|
 | `fdf-extract  <pdf>` | Extract all form fields as an **FDF** (to stdout) |
 | `xfdf-extract <pdf>` | Extract all form fields as an **XFDF** (XML flavour, to stdout) |
+| `fields <pdf>` | List all form fields as **JSON**: names, types, current values, a choice field's options and flags, a checkbox's on-state. The machine-readable companion to `fdf-extract`, built for scripts and AI agents |
 | `fill [-f\|--flatten] [-o FILE] <fdf> <pdf>` | Fill `<pdf>` with the values in `<fdf>` (`-` reads the FDF from stdin), write the result to stdout or, with **`-o`**, atomically to `FILE`. With **`--flatten`** (**`-f`**), bake the values into the page and remove the interactive form, producing a non‑editable PDF |
 | `xref <pdf>` | Dump the parsed cross-reference table as JSON (a debugging aid) |
 | `help` (`-h`, `--help`) | Print full help to stdout and exit |

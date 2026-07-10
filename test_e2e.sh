@@ -114,6 +114,36 @@ $BIN fdf-extract "$TMP/filled.pdf" 2>/dev/null | grep -q "SMOKE_TEST_VALUE" \
     && pass "round-trip: extract reads the filled value back" \
     || fail "ffpdf cannot re-read its own fill output"
 
+echo "== fields: JSON listing (types, options, on-states, values) =="
+# The agent-facing contract: names, types, current values, choice options and
+# flags, checkbox on-states. Uses the committed example form (14 fields, every
+# type) and its filled version.
+$BIN fields docs/example-form.pdf 2>/dev/null > "$TMP/fields.json"
+python3 - "$TMP/fields.json" <<'PY' && pass "fields: unfilled form JSON contract" || fail "fields JSON wrong (unfilled)"
+import json, sys
+d = json.load(open(sys.argv[1]))
+f = {x["name"]: x for x in d["fields"]}
+assert d["count"] == 14
+assert f["FullName"]["type"] == "text" and f["FullName"]["value"] == ""
+assert f["CoverageType"]["combo"] and not f["CoverageType"]["multi_select"]
+assert f["CoverageType"]["options"] == ["Auto", "Home", "Life", "Umbrella"]
+assert f["AdditionalCoverages"]["multi_select"]
+assert f["PaperlessBilling"]["on_state"] == "On"
+assert f["Signature"]["type"] == "signature" and f["Signature"]["value"] is None
+PY
+$BIN fields docs/example-filled.pdf 2>/dev/null > "$TMP/fields_filled.json"
+python3 - "$TMP/fields_filled.json" <<'PY' && pass "fields: filled values incl. multi-select array" || fail "fields JSON wrong (filled)"
+import json, sys
+f = {x["name"]: x for x in json.load(open(sys.argv[1]))["fields"]}
+assert f["FullName"]["value"] == "Avery Whitfield"
+assert f["CoverageType"]["value"] == "Home"
+assert f["AdditionalCoverages"]["value"] == ["Flood", "Identity theft"]
+assert f["PaperlessBilling"]["value"] == "On"
+PY
+# Real-world file (compressed object streams): output must stay valid JSON.
+$BIN fields "$PDF" 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["count"] == 45' \
+    && pass "fields: valid JSON for f8821 (45 fields)" || fail "fields JSON invalid for f8821"
+
 echo "== CLI conventions (--, -o, stdin FDF) =="
 # '--' ends option parsing on every command (POSIX guideline 10).
 n=$($BIN fdf-extract -- "$PDF" 2>/dev/null | grep -c '^/T (')

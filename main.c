@@ -66,6 +66,9 @@ PROG_NAME " " PROG_VERSION " \xe2\x80\x94 read and fill PDF form fields.\n"
 "COMMANDS\n"
 "  fdf-extract  <pdf>              Extract form fields as an FDF\n"
 "  xfdf-extract <pdf>              Extract form fields as an XFDF\n"
+"  fields       <pdf>              List form fields as JSON: names, types,\n"
+"                                  current values, choice options, checkbox\n"
+"                                  on-states. Made for scripts and AI agents\n"
 "  fill [options] <fdf> <pdf>      Fill <pdf> with values from <fdf>\n"
 "                                  -f, --flatten bake the values in and remove\n"
 "                                                the form -> a non-editable PDF\n"
@@ -137,7 +140,8 @@ static int cmd_xref(const char *path) {
     return 0;
 }
 
-static int cmd_extract(int xfdf, const char *path) {
+// mode: 0 = FDF, 1 = XFDF, 2 = JSON field listing.
+static int cmd_extract(int mode, const char *path) {
     FILE *f = portable_fopen(path, "rb");
     if (!f) { perror("fopen"); return 1; }
 
@@ -156,7 +160,9 @@ static int cmd_extract(int xfdf, const char *path) {
         return 1;
     }
 
-    if (xfdf)
+    if (mode == 2)
+        extract_form_fields_json(f, &xref_table);
+    else if (mode == 1)
         extract_form_fields_xfdf(f, &xref_table);
     else
         extract_form_fields_fdf(f, &xref_table);
@@ -305,11 +311,12 @@ int main(int argc, char *argv[]) {
 
     // single-PDF commands
     if (strcmp(cmd, "fdf-extract") == 0 || strcmp(cmd, "xfdf-extract") == 0 ||
-        strcmp(cmd, "xref") == 0) {
+        strcmp(cmd, "fields") == 0 || strcmp(cmd, "xref") == 0) {
         int a = 2;
         if (a < argc && strcmp(argv[a], "--") == 0) a++;     // end of options
         if (argc - a != 1) { print_usage(stderr, prog); return 1; }
         if (strcmp(cmd, "xref") == 0) return cmd_xref(argv[a]);
+        if (strcmp(cmd, "fields") == 0) return cmd_extract(2, argv[a]);
         return cmd_extract(strcmp(cmd, "xfdf-extract") == 0, argv[a]);
     }
 
