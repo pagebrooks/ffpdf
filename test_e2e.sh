@@ -446,7 +446,10 @@ echo "== emoji field value (astral-plane, UTF-16 surrogate pairs) =="
 # Emoji live outside the BMP (e.g. U+1F600), so they must be written as UTF-16BE
 # surrogate pairs and decoded back exactly. Exercises both fill (encode) and
 # fields (decode), via the JSON input path with raw UTF-8 emoji bytes.
-python3 -c "open('$TMP/emoji.json','w',encoding='utf-8').write('{\"myfield\": \"go \U0001f600 \U0001f44d\"}')"
+python3 - "$TMP/emoji.json" <<'PY'
+import sys
+open(sys.argv[1], "w", encoding="utf-8").write('{"myfield": "go \U0001f600 \U0001f44d"}')
+PY
 $BIN fill -o "$TMP/emoji.pdf" "$TMP/indirect.pdf" "$TMP/emoji.json" 2>/dev/null
 python3 - "$TMP/emoji.pdf" <<'PY' && pass "emoji: written as UTF-16BE surrogate pairs" || fail "emoji encoding wrong"
 import sys, re
