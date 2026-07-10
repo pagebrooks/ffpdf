@@ -14,6 +14,7 @@ PDF gotchas encoded here, learned the hard way:
   - /DR needs a /ZaDb (ZapfDingbats) font because viewers regenerating
     checkbox appearances under /NeedAppearances expect it.
 """
+import hashlib
 import sys
 
 NAVY = "0.10 0.21 0.36"
@@ -210,7 +211,7 @@ objs[acro] = (f"<< /Fields [{annot_refs}] /NeedAppearances true "
               f"/DA (/Helv 11 Tf 0 g) "
               f"/DR << /Font << /Helv 5 0 R /HelvB 6 0 R /ZaDb {zadb} 0 R >> >> >>").encode()
 
-out = bytearray(b"%PDF-1.7\n")
+out = bytearray(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n")   # binary-marker comment line
 off = {}
 for n in sorted(objs):
     off[n] = len(out)
@@ -219,8 +220,11 @@ xref_off = len(out)
 out += b"xref\n0 %d\n" % (len(objs) + 1)
 out += b"0000000000 65535 f \n"
 out += b"".join(b"%010d 00000 n \n" % off[n] for n in sorted(objs))
-out += (b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n"
-        % (len(objs) + 1, xref_off))
+# Deterministic /ID (readers and some viewers expect one; md5 of the body
+# keeps regeneration byte-identical).
+fid = hashlib.md5(bytes(out)).hexdigest().upper().encode()
+out += (b"trailer\n<< /Size %d /Root 1 0 R /ID [<%s> <%s>] >>\nstartxref\n%d\n%%%%EOF\n"
+        % (len(objs) + 1, fid, fid, xref_off))
 
 open(sys.argv[1], "wb").write(out)
 print(f"wrote {sys.argv[1]} ({len(out)} bytes, {len(widgets)} fields)")
