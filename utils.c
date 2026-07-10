@@ -383,6 +383,11 @@ char* decompress_stream(const char *dict, const char *data, size_t data_len, siz
     if (strstr(dict, "FlateDecode"))    dec = decompress_flate(data, data_len, out_len);
     else if (strstr(dict, "LZWDecode")) dec = decompress_lzw(data, data_len, out_len);
     else if (!strstr(dict, "/Filter")) {
+        // The raw path obeys the same caps as the decoders: the single-stream
+        // ceiling and the cumulative per-run budget. Without them a crafted
+        // /Length would drive an unbounded attacker-controlled allocation.
+        if (data_len > decompress_limit()) return NULL;
+        if (decompress_account(data_len) != 0) return NULL;
         dec = malloc(data_len + 1);
         if (!dec) return NULL;
         memcpy(dec, data, data_len);

@@ -406,6 +406,17 @@ crashcheck "crafted /W widths (OOB read)"        "$TMP/poc_w.pdf"
 crashcheck "ObjStm decreasing offsets (heap OF)" "$TMP/poc_objstm.pdf"
 crashcheck "encrypt huge /Length (stack OOB)"    "$TMP/poc_length.pdf"
 
+echo "== raw (no-/Filter) streams obey the decompression caps =="
+# The unfiltered-stream passthrough must honor PDF_MAX_DECOMPRESSED like the
+# real decoders (CodeQL: uncontrolled allocation size). ffpdf's own filled
+# output carries a raw xref stream larger than a 10-byte cap, so parsing it
+# must fail under that cap and succeed without it.
+if PDF_MAX_DECOMPRESSED=10 $BIN fdf-extract "$TMP/filled.pdf" >/dev/null 2>&1; then
+    fail "raw stream ignored PDF_MAX_DECOMPRESSED"
+else
+    pass "raw stream respects PDF_MAX_DECOMPRESSED"
+fi
+
 echo "== decompression bomb guard =="
 # A tiny file whose object stream inflates to ~2 MB. With a decompressed-size
 # limit below that, the stream must be rejected cleanly (field unreachable, no
