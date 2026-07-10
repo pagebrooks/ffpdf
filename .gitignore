@@ -6,5 +6,6 @@ fuzz-findings/
 FUTURE_WORK.md
 filled.pdf
 answers.fdf
+values.json
 out/
 row.fdf

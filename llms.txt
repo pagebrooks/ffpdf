@@ -1,0 +1,48 @@
+# ffpdf
+
+> A ~100 KB command-line tool in C for reading and filling PDF form fields
+> (AcroForm). Only dependency: zlib. Fills text, checkbox, and choice fields,
+> syncs XFA data packets, handles encrypted PDFs (empty user password), and
+> writes fills as incremental updates. Built for batch use: roughly 600 form
+> fills per second per core, with no runtime to start.
+
+Key commands: `ffpdf fields form.pdf` lists all fields as JSON (names, labels,
+types, values, page, required/readonly/maxlen, choice options, checkbox
+on-states, and document xfa/dynamic_xfa flags). `ffpdf fill form.pdf
+values.json > out.pdf` fills a form from a values file. The values file may be
+an FDF or a JSON object (the same shape `fields` emits, so agents never author
+FDF), auto-detected; the PDF and values may be in either order, and the values
+may be `-` for stdin. The JSON is a flat object keyed by field name; the value
+type says how to fill it: string (text/choice), array of strings (multi-select),
+number (verbatim), boolean (check/clear a checkbox), null (skip). Example:
+`{"State": "NH", "Coverages": ["Flood","Fire"], "Paperless": true, "Zip": 3801}`.
+`-o FILE` writes atomically; `--flatten` bakes values in and removes the form;
+`--json` writes a JSON result (updated/not_found/truncated fields) to stdout;
+`--strict` exits 3 if any value did not match a field. Exit codes: 0 success,
+1 error, 2 nothing matched (no output written), 3 --strict partial mismatch.
+Diagnostics go to stderr, output to stdout.
+
+Install: download a static binary archive from
+https://github.com/pagebrooks/ffpdf/releases (Linux, macOS, Windows), or
+build from source with `make` (needs gcc and zlib).
+
+## Documentation
+
+- [README](https://github.com/pagebrooks/ffpdf/blob/main/README.md): full
+  guide with a worked example and the bulk-fill (mail-merge) batch pattern
+- [Man page](https://github.com/pagebrooks/ffpdf/blob/main/ffpdf.1): complete
+  command and option reference
+- [Security datasheet](https://github.com/pagebrooks/ffpdf/blob/main/docs/SECURITY-PRIVACY.md):
+  data handling, no network access, PHI guidance
+
+## Examples
+
+- [Example form](https://github.com/pagebrooks/ffpdf/blob/main/docs/example-form.pdf):
+  unfilled form exercising every field type
+- [Example FDF](https://github.com/pagebrooks/ffpdf/blob/main/docs/example-answers.fdf):
+  the values file format, including a multi-select array
+
+## Optional
+
+- [CHANGELOG](https://github.com/pagebrooks/ffpdf/blob/main/CHANGELOG.md): release history
+- [CONTRIBUTING](https://github.com/pagebrooks/ffpdf/blob/main/CONTRIBUTING.md): build, test, DCO sign-off

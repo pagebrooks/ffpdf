@@ -130,6 +130,16 @@ assert f["CoverageType"]["options"] == ["Auto", "Home", "Life", "Umbrella"]
 assert f["AdditionalCoverages"]["multi_select"]
 assert f["PaperlessBilling"]["on_state"] == "On"
 assert f["Signature"]["type"] == "signature" and f["Signature"]["value"] is None
+# metadata for agents: /TU labels, required (/Ff *-marked), maxlen (/MaxLen)
+assert f["FullName"]["label"] == "Full name"
+assert f["State"]["label"] == "State" and f["State"]["maxlen"] == 2
+assert f["Zip"]["maxlen"] == 10
+assert f["FullName"]["required"] is True          # "Full name *"
+assert f["Phone"]["required"] is False            # "Phone" (no *)
+assert all(x["readonly"] is False for x in d["fields"])
+# document-level flags and per-field page numbers
+assert d["xfa"] is False and d["dynamic_xfa"] is False
+assert all(x["page"] == 1 for x in d["fields"])
 PY
 $BIN fields docs/example-filled.pdf 2>/dev/null > "$TMP/fields_filled.json"
 python3 - "$TMP/fields_filled.json" <<'PY' && pass "fields: filled values incl. multi-select array" || fail "fields JSON wrong (filled)"
@@ -141,8 +151,138 @@ assert f["AdditionalCoverages"]["value"] == ["Flood", "Identity theft"]
 assert f["PaperlessBilling"]["value"] == "On"
 PY
 # Real-world file (compressed object streams): output must stay valid JSON.
-$BIN fields "$PDF" 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["count"] == 45' \
-    && pass "fields: valid JSON for f8821 (45 fields)" || fail "fields JSON invalid for f8821"
+$BIN fields "$PDF" 2>/dev/null | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+assert d["count"] == 45
+assert d["xfa"] is True and d["dynamic_xfa"] is False        # static XFA
+assert all(x.get("page") == 1 for x in d["fields"])          # via /Annots (no /P)
+' && pass "fields: f8821 JSON incl. xfa flag + page numbers" || fail "fields JSON invalid for f8821"
+# readonly flag (/Ff bit 1) on a minimal fixture.
+python3 - "$TMP/ro.pdf" <<'PY'
+import sys
+objs = {
+ 1: b"<</Type/Catalog/Pages 2 0 R/AcroForm 4 0 R>>",
+ 2: b"<</Type/Pages/Kids[3 0 R]/Count 1>>",
+ 3: b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]/Annots[5 0 R]>>",
+ 4: b"<</Fields[5 0 R]/DA(/Helv 0 Tf 0 g)>>",
+ 5: b"<</FT/Tx/Ff 1/T(locked)/V(preset)/Type/Annot/Subtype/Widget/Rect[10 10 90 30]/P 3 0 R>>",
+}
+o = bytearray(b"%PDF-1.7\n"); off = {}
+for n in sorted(objs):
+    off[n] = len(o); o += b"%d 0 obj\n" % n + objs[n] + b"\nendobj\n"
+x = len(o)
+o += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objs)+1)
+o += b"".join(b"%010d 00000 n \n" % off[n] for n in sorted(objs))
+o += b"trailer\n<</Size %d/Root 1 0 R>>\nstartxref\n%d\n%%%%EOF\n" % (len(objs)+1, x)
+open(sys.argv[1], "wb").write(o)
+PY
+$BIN fields "$TMP/ro.pdf" 2>/dev/null | python3 -c '
+import json, sys
+f = json.load(sys.stdin)["fields"][0]
+assert f["readonly"] is True and f["required"] is False and f["value"] == "preset"
+' && pass "fields: readonly flag reported" || fail "fields readonly flag wrong"
+# page numbers across a 2-page form (one field per page).
+python3 - "$TMP/2pg.pdf" <<'PY'
+import sys
+objs = {
+ 1: b"<</Type/Catalog/Pages 2 0 R/AcroForm 7 0 R>>",
+ 2: b"<</Type/Pages/Kids[3 0 R 4 0 R]/Count 2>>",
+ 3: b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]/Annots[5 0 R]>>",
+ 4: b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]/Annots[6 0 R]>>",
+ 5: b"<</FT/Tx/T(p1)/V()/Type/Annot/Subtype/Widget/Rect[10 10 90 30]/P 3 0 R>>",
+ 6: b"<</FT/Tx/T(p2)/V()/Type/Annot/Subtype/Widget/Rect[10 10 90 30]/P 4 0 R>>",
+ 7: b"<</Fields[5 0 R 6 0 R]/DA(/Helv 0 Tf 0 g)>>",
+}
+o = bytearray(b"%PDF-1.7\n"); off = {}
+for n in sorted(objs):
+    off[n] = len(o); o += b"%d 0 obj\n" % n + objs[n] + b"\nendobj\n"
+x = len(o)
+o += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objs)+1)
+o += b"".join(b"%010d 00000 n \n" % off[n] for n in sorted(objs))
+o += b"trailer\n<</Size %d/Root 1 0 R>>\nstartxref\n%d\n%%%%EOF\n" % (len(objs)+1, x)
+open(sys.argv[1], "wb").write(o)
+PY
+$BIN fields "$TMP/2pg.pdf" 2>/dev/null | python3 -c '
+import json, sys
+f = {x["name"]: x["page"] for x in json.load(sys.stdin)["fields"]}
+assert f["p1"] == 1 and f["p2"] == 2, f
+' && pass "fields: page number differs per page" || fail "fields page numbering wrong"
+
+echo "== radio group: discovery options + fill sets kid /AS =="
+python3 - "$TMP/radio.pdf" <<'PY'
+import sys
+opts = ["Email", "Phone", "Mail"]
+objs = {
+ 1: b"<</Type/Catalog/Pages 2 0 R/AcroForm 3 0 R>>",
+ 2: b"<</Type/Pages/Kids[4 0 R]/Count 1>>",
+ 3: b"<</Fields[8 0 R]/DA(/Helv 0 Tf 0 g)>>",
+ 4: b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 200]/Annots[5 0 R 6 0 R 7 0 R]>>",
+ 8: b"<</FT/Btn/Ff 32768/T(ContactMethod)/TU(Preferred contact)/V/Off/Kids[5 0 R 6 0 R 7 0 R]>>",
+ 9: b"<</Type/XObject/Subtype/Form/BBox[0 0 14 14]/Length 0>>\nstream\nendstream",
+ 10: b"<</Type/XObject/Subtype/Form/BBox[0 0 14 14]/Length 0>>\nstream\nendstream",
+}
+for i, o in enumerate(opts):
+    x = 10 + i * 90
+    objs[5+i] = (f"<</Type/Annot/Subtype/Widget/Parent 8 0 R/AS/Off"
+                 f"/Rect[{x} 100 {x+14} 114]/AP<</N<</{o} 9 0 R/Off 10 0 R>>>>/P 4 0 R>>").encode()
+o = bytearray(b"%PDF-1.7\n"); off = {}
+for n in sorted(objs):
+    off[n] = len(o); o += b"%d 0 obj\n" % n + objs[n] + b"\nendobj\n"
+x = len(o)
+o += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objs)+1)
+o += b"".join(b"%010d 00000 n \n" % off[n] for n in sorted(objs))
+o += b"trailer\n<</Size %d/Root 1 0 R>>\nstartxref\n%d\n%%%%EOF\n" % (len(objs)+1, x)
+open(sys.argv[1], "wb").write(o)
+PY
+$BIN fields "$TMP/radio.pdf" 2>/dev/null | python3 -c '
+import json, sys
+f = json.load(sys.stdin)["fields"][0]
+assert f["type"] == "button" and f["label"] == "Preferred contact"
+assert f["options"] == ["Email", "Phone", "Mail"], f
+' && pass "radio: discovery lists options" || fail "radio options missing"
+printf "%%FDF-1.2\n1 0 obj\n<< /FDF << /Fields [ << /T (ContactMethod) /V (Phone) >> ] >> >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%%%EOF\n" > "$TMP/radio.fdf"
+$BIN fill -o "$TMP/radio-out.pdf" "$TMP/radio.fdf" "$TMP/radio.pdf" 2>/dev/null
+python3 - "$TMP/radio-out.pdf" <<'PY' && pass "radio: fill sets parent /V and matching kid /AS" || fail "radio fill /AS wrong"
+import sys, re
+d = open(sys.argv[1], "rb").read()
+tail = d[d.rfind(b"%PDF"):]  # whole file
+# parent obj 8 -> /V/Phone
+assert re.search(rb"8 0 obj\b.*?/V\s*/Phone", tail, re.S), "parent /V not /Phone"
+# the Phone kid (obj 6) -> /AS/Phone ; an Email/Mail kid -> /AS/Off
+assert re.search(rb"6 0 obj\b.*?/AS\s*/Phone", tail, re.S), "phone kid /AS not set"
+assert re.search(rb"5 0 obj\b.*?/AS\s*/Off", tail, re.S), "email kid not /Off"
+PY
+
+echo "== fill --json / --strict (machine-readable outcome) =="
+# An FDF with one good field and one typo -> partial fill.
+printf '%%FDF-1.2\n1 0 obj\n<< /FDF << /Fields [ << /T (%s) /V (X) >> << /T (NoSuchField) /V (y) >> ] >> >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%%%EOF\n' "$NAME" > "$TMP/partial.fdf"
+# --json: result to stdout (PDF to -o), stderr diagnostics ignored.
+$BIN fill --json -o "$TMP/pj.pdf" "$TMP/partial.fdf" "$PDF" 2>/dev/null > "$TMP/result.json"
+python3 - "$TMP/result.json" <<'PY' && pass "fill --json: machine-readable result" || fail "fill --json wrong"
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["updated_count"] == 1 and d["not_found_count"] == 1
+assert d["not_found"] == ["NoSuchField"]
+assert len(d["updated"]) == 1
+PY
+# --json without -o must error (stdout carries the JSON, not the PDF).
+$BIN fill --json "$TMP/partial.fdf" "$PDF" >/dev/null 2>&1
+[ "$?" -eq 1 ] && pass "fill --json without -o errors" || fail "--json/-o guard missing"
+# --strict: any unmatched field -> exit 3; all matched -> exit 0.
+$BIN fill --strict -o "$TMP/ps.pdf" "$TMP/partial.fdf" "$PDF" >/dev/null 2>&1
+[ "$?" -eq 3 ] && pass "fill --strict: exit 3 on unmatched field" || fail "--strict exit code wrong"
+$BIN fill --strict -o "$TMP/ps.pdf" "$TMP/in.fdf" "$PDF" >/dev/null 2>&1
+[ "$?" -eq 0 ] && pass "fill --strict: exit 0 when all match" || fail "--strict false positive"
+# Zero fields matched is a failure by default (exit 2), no flag needed, and no
+# output is written.
+printf '%%FDF-1.2\n1 0 obj\n<< /FDF << /Fields [ << /T (NoSuchField) /V (x) >> ] >> >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%%%EOF\n' > "$TMP/none.fdf"
+rm -f "$TMP/none.pdf"
+$BIN fill -o "$TMP/none.pdf" "$PDF" "$TMP/none.fdf" >/dev/null 2>&1
+[ "$?" -eq 2 ] && [ ! -e "$TMP/none.pdf" ] && pass "fill: zero matches exits 2, no output" || fail "zero-match exit/output wrong"
+# Flatten is exempt: it removes the form even with no new values.
+$BIN fill --flatten -o "$TMP/flatz.pdf" "$PDF" "$TMP/none.fdf" >/dev/null 2>&1
+[ "$?" -eq 0 ] && [ -s "$TMP/flatz.pdf" ] && pass "fill --flatten: writes even with zero matches" || fail "flatten zero-match wrong"
 
 echo "== CLI conventions (--, -o, stdin FDF) =="
 # '--' ends option parsing on every command (POSIX guideline 10).
@@ -169,6 +309,71 @@ $BIN fill -o "$TMP/ofile.pdf" "$TMP/in.fdf" "$PDF" 2>/dev/null
 $BIN fill -o "$TMP/never.pdf" "$TMP/in.fdf" "$TMP/does-not-exist.pdf" 2>/dev/null
 [ "$?" -ne 0 ] && [ ! -e "$TMP/never.pdf" ] && [ ! -e "$TMP/never.pdf.tmp" ] \
     && pass "-o: failed fill leaves no partial output" || fail "-o atomicity broken"
+
+echo "== fill: /MaxLen truncation + warning + JSON report =="
+python3 - "$TMP/ml.pdf" <<'PY'
+import sys
+objs = {
+ 1: b"<</Type/Catalog/Pages 2 0 R/AcroForm 4 0 R>>",
+ 2: b"<</Type/Pages/Kids[3 0 R]/Count 1>>",
+ 3: b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 200]/Annots[5 0 R]>>",
+ 4: b"<</Fields[5 0 R]/DA(/Helv 12 Tf 0 g)/DR<</Font<</Helv 6 0 R>>>>/NeedAppearances true>>",
+ 5: b"<</FT/Tx/T(code)/MaxLen 5/V()/Type/Annot/Subtype/Widget/Rect[10 100 200 130]/DA(/Helv 12 Tf 0 g)/P 3 0 R>>",
+ 6: b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica/Name/Helv>>",
+}
+o = bytearray(b"%PDF-1.7\n"); off = {}
+for n in sorted(objs):
+    off[n] = len(o); o += b"%d 0 obj\n" % n + objs[n] + b"\nendobj\n"
+x = len(o)
+o += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objs)+1)
+o += b"".join(b"%010d 00000 n \n" % off[n] for n in sorted(objs))
+o += b"trailer\n<</Size %d/Root 1 0 R>>\nstartxref\n%d\n%%%%EOF\n" % (len(objs)+1, x)
+open(sys.argv[1], "wb").write(o)
+PY
+# over-length value: truncated to 5, warning on stderr, listed in --json.
+printf '%%FDF-1.2\n1 0 obj\n<< /FDF << /Fields [ << /T (code) /V (ABCDEFGHIJKL) >> ] >> >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%%%EOF\n' > "$TMP/ml.fdf"
+$BIN fill --json -o "$TMP/mlo.pdf" "$TMP/ml.pdf" "$TMP/ml.fdf" 2>"$TMP/mlerr" > "$TMP/mlres.json"
+grep -q "exceeds MaxLen 5; truncated" "$TMP/mlerr" && pass "MaxLen: warns on over-length value" || fail "no MaxLen warning"
+python3 - "$TMP/mlres.json" "$TMP/mlo.pdf" <<'PY' && pass "MaxLen: value truncated + reported in JSON" || fail "MaxLen truncation wrong"
+import json, sys, re
+d = json.load(open(sys.argv[1]))
+assert d["truncated"] == ["code"], d
+v = re.search(rb"/V\s*\(([^)]*)\)", open(sys.argv[2], "rb").read()[::-1].replace(b")", b")"))  # crude
+data = open(sys.argv[2], "rb").read()
+m = re.findall(rb"/V\(([A-Z]+)\)", data)
+assert m and m[-1] == b"ABCDE", m   # cut to 5 chars
+PY
+
+echo "== fill: JSON values + either-order / auto-detected input =="
+# The values file may be an FDF or a JSON object, in either order relative to
+# the PDF, auto-detected by content. Same JSON shape `fields` produces.
+cat > "$TMP/values.json" <<'JSON'
+{ "topmostSubform[0].Page1[0].Pg1Header[0].f1_1[0]": "JSON_VALUE",
+  "topmostSubform[0].Page1[0].c1_1[0]": true }
+JSON
+# New order (pdf first), JSON values, with --json result.
+$BIN fill --json -o "$TMP/vj.pdf" "$PDF" "$TMP/values.json" 2>/dev/null > "$TMP/vjres.json"
+python3 - "$TMP/vjres.json" <<'PY' && pass "fill: JSON values (pdf-first) + result" || fail "JSON values fill wrong"
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["updated_count"] == 2 and d["not_found_count"] == 0, d
+PY
+grep -qa 'JSON_VALUE' "$TMP/vj.pdf" && pass "fill: JSON value present in output" || fail "JSON value missing"
+# Old order (values first) must still work (back-compat, keeps demos valid).
+$BIN fill -o "$TMP/vo.pdf" "$TMP/values.json" "$PDF" 2>/dev/null
+grep -qa 'JSON_VALUE' "$TMP/vo.pdf" && pass "fill: values-first order still accepted" || fail "old order broken"
+# JSON from stdin ("-").
+echo '{"topmostSubform[0].Page1[0].Pg1Header[0].f1_1[0]": "PIPED"}' \
+    | $BIN fill -o "$TMP/vp.pdf" "$PDF" - 2>/dev/null
+grep -qa 'PIPED' "$TMP/vp.pdf" && pass "fill: JSON from stdin (-)" || fail "stdin JSON broken"
+# Malformed JSON must be rejected (exit 1).
+echo '{ bad json' | $BIN fill -o "$TMP/vb.pdf" "$PDF" - >/dev/null 2>&1
+[ "$?" -eq 1 ] && pass "fill: malformed JSON rejected" || fail "bad JSON accepted"
+# Two PDFs (or two non-PDFs) -> a clear error, not a wrong guess.
+$BIN fill -o "$TMP/x.pdf" "$PDF" "$PDF" >/dev/null 2>&1
+[ "$?" -ne 0 ] && pass "fill: ambiguous args rejected" || fail "ambiguous args accepted"
+
+echo "== XFA datasets XML escaping =="
 
 echo "== XFA datasets XML escaping =="
 # A value with XML metacharacters (& < >) must be escaped when spliced into the
@@ -235,6 +440,38 @@ assert m, "no /V hex string found (value not UTF-16BE encoded)"
 b = bytes.fromhex(m[-1].group(1).decode())
 assert b[:2] == b'\xfe\xff', "missing UTF-16BE BOM"
 assert b[2:].decode('utf-16-be') == "café señor 日本 \U0001f600", "value mismatch"
+PY
+
+echo "== emoji field value (astral-plane, UTF-16 surrogate pairs) =="
+# Emoji live outside the BMP (e.g. U+1F600), so they must be written as UTF-16BE
+# surrogate pairs and decoded back exactly. Exercises both fill (encode) and
+# fields (decode), via the JSON input path with raw UTF-8 emoji bytes.
+python3 - "$TMP/emoji.json" <<'PY'
+import sys
+open(sys.argv[1], "w", encoding="utf-8").write('{"myfield": "go \U0001f600 \U0001f44d"}')
+PY
+$BIN fill -o "$TMP/emoji.pdf" "$TMP/indirect.pdf" "$TMP/emoji.json" 2>/dev/null
+python3 - "$TMP/emoji.pdf" <<'PY' && pass "emoji: written as UTF-16BE surrogate pairs" || fail "emoji encoding wrong"
+import sys, re
+d = open(sys.argv[1], 'rb').read()
+m = [x for x in re.finditer(rb'myfield.*?/V\s*<([0-9A-Fa-f]+)>', d, re.S)]
+assert m, "no /V hex string (emoji not UTF-16BE encoded)"
+b = bytes.fromhex(m[-1].group(1).decode())
+assert b[:2] == b'\xfe\xff', "missing UTF-16BE BOM"
+assert b[2:].decode('utf-16-be') == "go \U0001f600 \U0001f44d", "emoji value mismatch"
+u = b[2:]  # a lead surrogate (0xD800-0xDBFF) must be present
+assert any(0xD8 <= u[i] <= 0xDB for i in range(0, len(u) - 1, 2)), "no surrogate pair"
+PY
+# Read the fields output from a binary file (not sys.stdin) and decode UTF-8
+# explicitly: on Windows, sys.stdin text mode uses the console codepage, not
+# UTF-8, and mangles the multibyte emoji bytes. The two checks above already
+# proved the PDF holds the correct UTF-16BE bytes, so this isolates decode.
+$BIN fields "$TMP/emoji.pdf" 2>/dev/null > "$TMP/emoji.fields.json"
+python3 - "$TMP/emoji.fields.json" <<'PY' && pass "emoji: round-trips through fields (decode)" || fail "emoji decode wrong"
+import json, sys
+data = json.loads(open(sys.argv[1], "rb").read().decode("utf-8"))
+v = [x["value"] for x in data["fields"] if x["name"] == "myfield"][0]
+assert v == "go \U0001f600 \U0001f44d", repr(v)
 PY
 
 echo "== hybrid-reference file (/XRefStm) =="

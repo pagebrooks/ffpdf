@@ -63,11 +63,24 @@ def box(x, y, w, h):
     c.rect(x, y, w, h, fill="1 1 1", stroke=BOX_BORDER)
 
 
-def text_field(name, lab, x, y, w, h=22):
+def meta(lab, flags=0):
+    """/TU tooltip (human-readable label) + /Ff Required for '*'-marked fields.
+    Machine consumers (ffpdf fields, AI agents) read these."""
+    required = lab.rstrip().endswith("*")
+    tu = lab.rstrip().rstrip("*").rstrip()
+    if required:
+        flags |= 2                                    # /Ff bit 2 = Required
+    ff = f" /Ff {flags}" if flags else ""
+    return f"/TU ({tu}){ff} "
+
+
+def text_field(name, lab, x, y, w, h=22, maxlen=None):
     label(x, y + h + 5, lab)
     box(x, y, w, h)
+    ml = f" /MaxLen {maxlen}" if maxlen else ""
     widgets.append(
         f"<< /Type /Annot /Subtype /Widget /FT /Tx /T ({name}) /V () "
+        f"{meta(lab)}{ml}"
         f"/Rect [{x} {y} {x + w} {y + h}] /DA (/Helv 11 Tf 0 g) "
         f"/F 4 /P 3 0 R >>")
 
@@ -79,7 +92,8 @@ def combo_field(name, lab, x, y, w, opts, h=22):
     c.raw(f"0.45 g {ax} {y + 13} m {ax + 8} {y + 13} l {ax + 4} {y + 7} l f")
     opt = "".join(f"({o})" for o in opts)
     widgets.append(
-        f"<< /Type /Annot /Subtype /Widget /FT /Ch /Ff 131072 /T ({name}) "
+        f"<< /Type /Annot /Subtype /Widget /FT /Ch /T ({name}) "
+        f"{meta(lab, 0x20000)}"
         f"/V () /Opt [{opt}] /Rect [{x} {y} {x + w} {y + h}] "
         f"/DA (/Helv 11 Tf 0 g) /F 4 /P 3 0 R >>")
 
@@ -89,7 +103,8 @@ def list_field(name, lab, x, y, w, h, opts):
     box(x, y, w, h)
     opt = "".join(f"({o})" for o in opts)
     widgets.append(
-        f"<< /Type /Annot /Subtype /Widget /FT /Ch /Ff 2097152 /T ({name}) "
+        f"<< /Type /Annot /Subtype /Widget /FT /Ch /T ({name}) "
+        f"{meta(lab, 0x200000)}"
         f"/V () /Opt [{opt}] /Rect [{x} {y} {x + w} {y + h}] "
         f"/DA (/Helv 10 Tf 0 g) /F 4 /P 3 0 R >>")
 
@@ -122,8 +137,8 @@ text_field("Phone",       "Phone",           330, 572, 228)
 section(2, "MAILING ADDRESS", 536)
 text_field("StreetAddress", "Street address *", LM, 488, 504)
 text_field("City",          "City *",           LM, 440, 246)
-text_field("State",         "State *",          330, 440, 70)
-text_field("Zip",           "ZIP *",            430, 440, 128)
+text_field("State",         "State *",          330, 440, 70, maxlen=2)
+text_field("Zip",           "ZIP *",            430, 440, 128, maxlen=10)
 
 # ---- 3. policy -----------------------------------------------------------
 section(3, "POLICY", 404)
@@ -150,6 +165,7 @@ c.text(LM, 220, "SIGNATURE", font="HelvB", size=7.5,
        color=f"{GRAY_TXT} {GRAY_TXT} {GRAY_TXT}")
 widgets.append(
     f"<< /Type /Annot /Subtype /Widget /FT /Sig /T (Signature) "
+    f"/TU (Signature) "
     f"/Rect [{LM} 234 354 258] /F 4 /P 3 0 R >>")
 text_field("SignatureDate", "Date", 430, 232, 128)
 
@@ -181,6 +197,7 @@ acro = zadb + 1
 
 widgets[CHECKBOX_DICT_INDEX] = (
     f"<< /Type /Annot /Subtype /Widget /FT /Btn /T (PaperlessBilling) "
+    f"/TU (Enroll in paperless billing) "
     f"/V /Off /AS /Off /Rect [{CB[0]} {CB[1]} {CB[2]} {CB[3]}] "
     f"/F 4 /P 3 0 R /MK << /CA (4) >> "
     f"/AP << /N << /On {ap_on} 0 R /Off {ap_off} 0 R >> >> >>")

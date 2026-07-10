@@ -157,7 +157,7 @@ docs/demo.gif: docs/demo.tape docs/demo-form.pdf $(TARGET)
 	  { echo "vhs not found -- install it (and ttyd + ffmpeg): https://github.com/charmbracelet/vhs"; exit 1; }
 	vhs docs/demo.tape
 
-docs/demo-batch.gif: docs/demo-batch.tape docs/demo-template.fdf docs/demo-customers.csv docs/demo-form.pdf $(TARGET)
+docs/demo-batch.gif: docs/demo-batch.tape docs/demo-template.json docs/demo-customers.csv docs/demo-form.pdf $(TARGET)
 	@command -v vhs >/dev/null || \
 	  { echo "vhs not found -- install it (and ttyd + ffmpeg): https://github.com/charmbracelet/vhs"; exit 1; }
 	vhs docs/demo-batch.tape

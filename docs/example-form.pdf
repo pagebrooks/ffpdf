@@ -84,46 +84,46 @@ endobj
 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Name /HelvB >>
 endobj
 7 0 obj
-<< /Type /Annot /Subtype /Widget /FT /Tx /T (FullName) /V () /Rect [54 620 380 642] /DA (/Helv 11 Tf 0 g) /F 4 /P 3 0 R >>
+<< /Type /Annot /Subtype /Widget /FT /Tx /T (FullName) /V () /TU (Full name) /Ff 2 /Rect [54 620 380 642] /DA (/Helv 11 Tf 0 g) /F 4 /P 3 0 R >>
 endobj
 8 0 obj
-<< /Type /Annot /Subtype /Widget /FT /Tx /T (DateOfBirth) /V () /Rect [400 620 558 642] /DA (/Helv 11 Tf 0 g) /F 4 /P 3 0 R >>
+<< /Type /Annot /Subtype /Widget /FT /Tx /T (DateOfBirth) /V () /TU (Date of birth) /Ff 2 /Rect [400 620 558 642] /DA (/Helv 11 Tf 0 g) /F 4 /P 3 0 R >>
 endobj
 9 0 obj
-<< /Type /Annot /Subtype /Widget /FT /Tx /T (Email) /V () /Rect [54 572 300 594] /DA (/Helv 11 Tf 0 g) /F 4 /P 3 0 R >>
+<< /Type /Annot /Subtype /Widget /FT /Tx /T (Email) /V () /TU (Email address) /Rect [54 572 300 594] /DA (/Helv 11 Tf 0 g) /F 4 /P 3 0 R >>
 endobj
 10 0 obj
-<< /Type /Annot /Subtype /Widget /FT /Tx /T (Phone) /V () /Rect [330 572 558 594] /DA (/Helv 11 Tf 0 g) /F 4 /P 3 0 R >>
+<< /Type /Annot /Subtype /Widget /FT /Tx /T (Phone) /V () /TU (Phone) /Rect [330 572 558 594] /DA (/Helv 11 Tf 0 g) /F 4 /P 3 0 R >>
 endobj
 11 0 obj
-<< /Type /Annot /Subtype /Widget /FT /Tx /T (StreetAddress) /V () /Rect [54 488 558 510] /DA (/Helv 11 Tf 0 g) /F 4 /P 3 0 R >>
+<< /Type /Annot /Subtype /Widget /FT /Tx /T (StreetAddress) /V () /TU (Street address) /Ff 2 /Rect [54 488 558 510] /DA (/Helv 11 Tf 0 g) /F 4 /P 3 0 R >>
 endobj
 12 0 obj
-<< /Type /Annot /Subtype /Widget /FT /Tx /T (City) /V () /Rect [54 440 300 462] /DA (/Helv 11 Tf 0 g) /F 4 /P 3 0 R >>
+<< /Type /Annot /Subtype /Widget /FT /Tx /T (City) /V () /TU (City) /Ff 2 /Rect [54 440 300 462] /DA (/Helv 11 Tf 0 g) /F 4 /P 3 0 R >>
 endobj
 13 0 obj
-<< /Type /Annot /Subtype /Widget /FT /Tx /T (State) /V () /Rect [330 440 400 462] /DA (/Helv 11 Tf 0 g) /F 4 /P 3 0 R >>
+<< /Type /Annot /Subtype /Widget /FT /Tx /T (State) /V () /TU (State) /Ff 2  /MaxLen 2/Rect [330 440 400 462] /DA (/Helv 11 Tf 0 g) /F 4 /P 3 0 R >>
 endobj
 14 0 obj
-<< /Type /Annot /Subtype /Widget /FT /Tx /T (Zip) /V () /Rect [430 440 558 462] /DA (/Helv 11 Tf 0 g) /F 4 /P 3 0 R >>
+<< /Type /Annot /Subtype /Widget /FT /Tx /T (Zip) /V () /TU (ZIP) /Ff 2  /MaxLen 10/Rect [430 440 558 462] /DA (/Helv 11 Tf 0 g) /F 4 /P 3 0 R >>
 endobj
 15 0 obj
-<< /Type /Annot /Subtype /Widget /FT /Tx /T (PolicyNumber) /V () /Rect [54 356 300 378] /DA (/Helv 11 Tf 0 g) /F 4 /P 3 0 R >>
+<< /Type /Annot /Subtype /Widget /FT /Tx /T (PolicyNumber) /V () /TU (Policy number) /Ff 2 /Rect [54 356 300 378] /DA (/Helv 11 Tf 0 g) /F 4 /P 3 0 R >>
 endobj
 16 0 obj
-<< /Type /Annot /Subtype /Widget /FT /Ch /Ff 131072 /T (CoverageType) /V () /Opt [(Auto)(Home)(Life)(Umbrella)] /Rect [330 356 558 378] /DA (/Helv 11 Tf 0 g) /F 4 /P 3 0 R >>
+<< /Type /Annot /Subtype /Widget /FT /Ch /T (CoverageType) /TU (Coverage type) /Ff 131074 /V () /Opt [(Auto)(Home)(Life)(Umbrella)] /Rect [330 356 558 378] /DA (/Helv 11 Tf 0 g) /F 4 /P 3 0 R >>
 endobj
 17 0 obj
-<< /Type /Annot /Subtype /Widget /FT /Ch /Ff 2097152 /T (AdditionalCoverages) /V () /Opt [(Flood)(Earthquake)(Identity theft)(Pet injury)] /Rect [54 284 300 332] /DA (/Helv 10 Tf 0 g) /F 4 /P 3 0 R >>
+<< /Type /Annot /Subtype /Widget /FT /Ch /T (AdditionalCoverages) /TU (Additional coverages (select all that apply)) /Ff 2097152 /V () /Opt [(Flood)(Earthquake)(Identity theft)(Pet injury)] /Rect [54 284 300 332] /DA (/Helv 10 Tf 0 g) /F 4 /P 3 0 R >>
 endobj
 18 0 obj
-<< /Type /Annot /Subtype /Widget /FT /Btn /T (PaperlessBilling) /V /Off /AS /Off /Rect [330 300 346 316] /F 4 /P 3 0 R /MK << /CA (4) >> /AP << /N << /On 21 0 R /Off 22 0 R >> >> >>
+<< /Type /Annot /Subtype /Widget /FT /Btn /T (PaperlessBilling) /TU (Enroll in paperless billing) /V /Off /AS /Off /Rect [330 300 346 316] /F 4 /P 3 0 R /MK << /CA (4) >> /AP << /N << /On 21 0 R /Off 22 0 R >> >> >>
 endobj
 19 0 obj
-<< /Type /Annot /Subtype /Widget /FT /Sig /T (Signature) /Rect [54 234 354 258] /F 4 /P 3 0 R >>
+<< /Type /Annot /Subtype /Widget /FT /Sig /T (Signature) /TU (Signature) /Rect [54 234 354 258] /F 4 /P 3 0 R >>
 endobj
 20 0 obj
-<< /Type /Annot /Subtype /Widget /FT /Tx /T (SignatureDate) /V () /Rect [430 232 558 254] /DA (/Helv 11 Tf 0 g) /F 4 /P 3 0 R >>
+<< /Type /Annot /Subtype /Widget /FT /Tx /T (SignatureDate) /V () /TU (Date) /Rect [430 232 558 254] /DA (/Helv 11 Tf 0 g) /F 4 /P 3 0 R >>
 endobj
 21 0 obj
 << /Type /XObject /Subtype /Form /BBox [0 0 16 16] /Length 52 >>
@@ -152,25 +152,25 @@ xref
 0000003875 00000 n 
 0000003957 00000 n 
 0000004045 00000 n 
-0000004183 00000 n 
-0000004325 00000 n 
-0000004460 00000 n 
-0000004597 00000 n 
-0000004741 00000 n 
-0000004876 00000 n 
-0000005013 00000 n 
-0000005148 00000 n 
-0000005291 00000 n 
-0000005482 00000 n 
-0000005699 00000 n 
-0000005897 00000 n 
-0000006010 00000 n 
-0000006155 00000 n 
-0000006305 00000 n 
-0000006402 00000 n 
-0000006488 00000 n 
+0000004205 00000 n 
+0000004373 00000 n 
+0000004528 00000 n 
+0000004677 00000 n 
+0000004848 00000 n 
+0000005000 00000 n 
+0000005165 00000 n 
+0000005327 00000 n 
+0000005496 00000 n 
+0000005707 00000 n 
+0000005975 00000 n 
+0000006207 00000 n 
+0000006336 00000 n 
+0000006492 00000 n 
+0000006642 00000 n 
+0000006739 00000 n 
+0000006825 00000 n 
 trailer
-<< /Size 25 /Root 1 0 R /ID [<3C488C4F218EA9C0F7D0F0186DE7D40A> <3C488C4F218EA9C0F7D0F0186DE7D40A>] >>
+<< /Size 25 /Root 1 0 R /ID [<1E4F37DD7AF56B9A4DF102F74815D6C6> <1E4F37DD7AF56B9A4DF102F74815D6C6>] >>
 startxref
-6719
+7056
 %%EOF

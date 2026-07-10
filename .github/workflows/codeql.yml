@@ -27,9 +27,9 @@ jobs:
         with:
           languages: c-cpp
           build-mode: manual
-          # security-extended: broader security queries than the default suite;
-          # right bar for a parser that eats untrusted input.
-          queries: security-extended
+          # Query suite (security-extended) and the cpp/path-injection exclusion
+          # live in the config file.
+          config-file: ./.github/codeql/codeql-config.yml
 
       - name: Build
         run: |

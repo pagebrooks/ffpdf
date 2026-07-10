@@ -1,0 +1,18 @@
+name: ffpdf CodeQL config
+
+# security-extended: broader security queries than the default suite; the right
+# bar for a parser that eats untrusted input.
+queries:
+  - uses: security-extended
+
+query-filters:
+  # cpp/path-injection flags every fopen() of a path the user passed on the
+  # command line. For a CLI whose entire job is reading the files named in
+  # argv, that is the interface, not a vulnerability -- there is no trust
+  # boundary between "user input" and "the file the user asked to open".
+  # This rule fired on ~every PR that adds a file-opening path (dismissed on
+  # alerts 4-8, 10-15), so it is excluded here rather than dismissed each time.
+  # If ffpdf ever accepts a path from genuinely untrusted input (e.g. a field
+  # value that names an external file), revisit this exclusion.
+  - exclude:
+      id: cpp/path-injection

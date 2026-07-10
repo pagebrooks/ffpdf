@@ -23,7 +23,7 @@ ffpdf \- extract and fill PDF form fields
 .RB [ \-o
 .IR file ]
 .RB [ \-\- ]
-.I fdf pdf
+.I pdf values
 .br
 .B ffpdf
 .B xref
@@ -84,26 +84,42 @@ on standard output: each field's fully-qualified name, type
 .BR button ,
 .BR choice ,
 .BR signature ),
-and current value, plus a choice field's options and combo/multi-select flags
-and a checkbox's on-state name. This is the machine-readable companion to
+and current value. Where the PDF provides them, each field also carries a
+human-readable
+.B label
+(the field's tooltip / alternate text), the
+.BR required ", " readonly ", and " maxlen
+constraints, its 1-based
+.BR page ,
+and, per type, a choice field's options and combo/multi-select flags and a
+checkbox's on-state name. The top-level object also reports
+.B xfa
+and
+.B dynamic_xfa
+flags: for a dynamic XFA form an empty field list means the fields live in the
+XFA template, not that the form is empty. This is the machine-readable companion to
 .BR fdf-extract ,
 intended for scripts and AI agents that need to know what a form accepts
 before filling it.
 .TP
-.BI fill " \fR[\fP\-f\fR|\fP\-\-flatten\fR] [\fP\-o \fIfile\fR] [\fP\-\-\fR]\fP fdf pdf"
+.BI fill " \fR[\fP\-f\fR|\fP\-\-flatten\fR] [\fP\-o \fIfile\fR] [\fP\-\-\fR]\fP pdf values"
 Fill
 .I pdf
-using the values in
-.IR fdf ,
-writing the resulting PDF to standard output. Note the argument order:
-the
+using a
+.I values
+file, which may be an
 .B FDF
-comes first, then the
-.BR PDF .
-.I fdf
+or a flat
+.B JSON
+object (the format is auto-detected from its first byte). The
+.I pdf
+and
+.I values
+arguments may be given in either order, and
+.I values
 may be
 .B \-
-to read the FDF from standard input.
+to read from standard input.
 The tool selects each field's correct type behaviour (checkbox on\-state,
 choice selection index, text appearance) and, for forms carrying an XFA data
 packet, keeps that packet in sync so viewers that render XFA show the values.
@@ -145,6 +161,38 @@ ends option parsing, for file names that begin with
 The extraction and
 .B xref
 commands accept it too.
+.IP
+With
+.B \-\-json
+a machine-readable result is written to standard output listing the
+.B updated
+and
+.B not_found
+field names and their counts; because standard output then carries the JSON,
+.B \-o
+is required for the PDF. With
+.B \-\-strict
+the command exits 3 if any value did not match a form field (the
+output is still written with the fields that matched).
+.IP
+A multi-select choice field is filled with an array of option strings:
+.BR "/V [(opt1) (opt2)]" .
+.IP
+A
+.B JSON
+values file is an object mapping field name to a string, an array of strings
+(multi-select), a number (used verbatim), or a boolean
+.RB ( true / false
+to check/clear a checkbox) \(em the same shape
+.B fields
+produces, so a caller can fill without authoring FDF.
+.IP
+A value longer than a text field's
+.B /MaxLen
+is truncated to fit, with a warning on standard error; with
+.B \-\-json
+the affected field names are listed under
+.BR truncated .
 .TP
 .BI xref " pdf"
 Parse the cross\-reference table of
@@ -174,7 +222,9 @@ All four AcroForm field types are handled:
 .BR On ,
 or
 .B 1
-map to the widget's real on\-state),
+map to the widget's real on\-state, and a radio group's option names are
+reported by
+.BR fields ),
 .B choice
 (combo box and list box, single or multi\-select), and
 .B signature
@@ -202,6 +252,19 @@ Success.
 .B 1
 An error occurred: invalid usage, a file that could not be opened, or a PDF
 whose cross\-reference table could not be parsed.
+.TP
+.B 2
+.B fill
+only: no field in the input matched the form, so nothing was filled and no
+output was written. A no-op fill (for example, every field name misspelled) is
+treated as a failure rather than a silent success.
+.RB ( \-\-flatten
+is exempt, since it removes the form even with no new values.)
+.TP
+.B 3
+.B fill \-\-strict
+only: the fill succeeded but some \fI(not all)\fR value did not match a form
+field.
 .SH EXAMPLES
 List the fields of a form:
 .PP
@@ -215,7 +278,7 @@ Fill a form and save the result:
 .PP
 .RS
 .EX
-ffpdf fill answers.fdf form.pdf > filled.pdf
+ffpdf fill form.pdf answers.fdf > filled.pdf
 .EE
 .RE
 .PP
@@ -223,15 +286,40 @@ Fill and flatten to a non-editable PDF, written atomically with \-o:
 .PP
 .RS
 .EX
-ffpdf fill \-\-flatten \-o final.pdf answers.fdf form.pdf
+ffpdf fill \-\-flatten \-o final.pdf form.pdf answers.fdf
 .EE
 .RE
 .PP
-Mail merge: pipe a templated FDF straight in (no temp file):
+Bulk fill (mail merge): pipe a templated FDF straight in (no temp file):
 .PP
 .RS
 .EX
-envsubst < template.fdf | ffpdf fill \-o out.pdf \- form.pdf
+envsubst < template.fdf | ffpdf fill \-o out.pdf form.pdf \-
+.EE
+.RE
+.PP
+Fill from a JSON values object (the shape
+.B fields
+produces):
+.PP
+.RS
+.EX
+ffpdf fill \-o out.pdf form.pdf values.json
+.EE
+.RE
+.PP
+where
+.I values.json
+is a flat object keyed by field name, e.g.:
+.PP
+.RS
+.EX
+{
+  "applicant_name": "Ada Lovelace",
+  "coverages": ["Flood", "Fire"],
+  "zip": 94043,
+  "agree": true
+}
 .EE
 .RE
 .PP

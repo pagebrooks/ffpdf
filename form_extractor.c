@@ -259,9 +259,92 @@ static void json_value(const char *v) {
     }
 }
 
+// Advance past an indirect reference "N G R" whose N was just read.
+static const char *skip_ref(const char *p) {
+    while (isdigit((unsigned char)*p)) p++;              // N
+    while (isspace((unsigned char)*p)) p++;
+    while (isdigit((unsigned char)*p)) p++;              // G
+    while (isspace((unsigned char)*p)) p++;
+    if (*p == 'R') p++;
+    return p;
+}
+
+typedef struct { int obj; int page; } AnnotPage;
+
+// Walk the page tree from `node`, and for each /Page leaf record every entry of
+// its /Annots array against that page's 1-based number. This maps a widget's
+// object number to its page (fields often lack a back-pointer /P, but every
+// widget appears in some page's /Annots). Bounded against cycles and huge trees.
+static void map_annots_to_pages(FILE *f, XRefTable *xref, int node, int depth,
+                                AnnotPage *m, int *n, int cap, int *pageno) {
+    if (depth > 64 || *n >= cap) return;
+    char *d = get_object_raw(f, xref, node, NULL);
+    if (!d) return;
+    const char *kids = find_key(d, "/Kids");
+    if (kids && *kids == '[') {                          // intermediate /Pages node
+        const char *p = kids + 1;
+        while (*p && *p != ']' && *n < cap) {
+            while (isspace((unsigned char)*p)) p++;
+            if (isdigit((unsigned char)*p)) {
+                int kid = atoi(p);
+                p = skip_ref(p);
+                map_annots_to_pages(f, xref, kid, depth + 1, m, n, cap, pageno);
+            } else if (*p) p++;
+        }
+    } else {                                             // /Page leaf
+        int page = ++(*pageno);
+        const char *an = find_key(d, "/Annots");
+        char *anbuf = NULL;
+        if (an && isdigit((unsigned char)*an)) {         // /Annots N 0 R (indirect)
+            anbuf = get_object_raw(f, xref, atoi(an), NULL);
+            an = anbuf;
+            while (an && *an && *an != '[') an++;
+        }
+        if (an && *an == '[') {
+            const char *p = an + 1;
+            while (*p && *p != ']' && *n < cap) {
+                while (isspace((unsigned char)*p)) p++;
+                if (isdigit((unsigned char)*p)) {
+                    m[*n].obj = atoi(p);
+                    m[*n].page = page;
+                    (*n)++;
+                    p = skip_ref(p);
+                } else if (*p) p++;
+            }
+        }
+        free(anbuf);
+    }
+    free(d);
+}
+
 void extract_form_fields_json(FILE *f, const XRefTable *xref_table) {
     FieldMap map = {0};
     build_field_map(f, (XRefTable *)xref_table, 0, &map);
+
+    // Document-level facts an agent needs to interpret the field list: whether
+    // the form is XFA (AcroForm /XFA) and, if so, whether it is dynamic
+    // (catalog /NeedsRendering) -- for a dynamic form an empty field list means
+    // fields live in the XFA template, not that the form is empty.
+    int root = find_root_obj(f);
+    char *cat = root ? get_object_raw(f, (XRefTable *)xref_table, root, NULL) : NULL;
+    int dynamic_xfa = 0;
+    if (cat) {
+        const char *nr = find_key(cat, "/NeedsRendering");
+        if (nr && strncmp(nr, "true", 4) == 0) dynamic_xfa = 1;
+    }
+    int acro = find_acroform_obj(f, (XRefTable *)xref_table, root);
+    char *afd = acro > 0 ? get_object_raw(f, (XRefTable *)xref_table, acro, NULL) : NULL;
+    int xfa = afd && find_key(afd, "/XFA") != NULL;
+    free(afd);
+
+    // Widget-object -> page-number map (see map_annots_to_pages).
+    int pcap = 4096, nmap = 0, pageno = 0;
+    AnnotPage *pmap = malloc((size_t)pcap * sizeof(AnnotPage));
+    const char *pk = cat ? find_key(cat, "/Pages") : NULL;
+    if (pmap && pk && isdigit((unsigned char)*pk))
+        map_annots_to_pages(f, (XRefTable *)xref_table, atoi(pk), 0,
+                            pmap, &nmap, pcap, &pageno);
+    free(cat);
 
     printf("{\n  \"fields\": [");
     int emitted = 0;
@@ -269,9 +352,25 @@ void extract_form_fields_json(FILE *f, const XRefTable *xref_table) {
         if (!map.items[i].terminal) continue;
         char *dict = get_object_raw(f, (XRefTable *)xref_table,
                                     map.items[i].obj_num, NULL);
+        // Field flags (/Ff) and /TU/MaxLen are read from the terminal field
+        // object (the common layout; inheritance from a parent field node is
+        // not resolved, matching the choice-flag handling below).
+        const char *ff = dict ? find_key(dict, "/Ff") : NULL;
+        int flags = ff ? atoi(ff) : 0;
+
         printf("%s\n    {\n      \"name\": \"", emitted++ ? "," : "");
         json_body((const unsigned char *)map.items[i].qname,
                   strlen(map.items[i].qname));
+        putchar('"');
+
+        // label: the /TU tooltip, i.e. the human-readable field name. Only
+        // emitted when present as a direct string (agents map data by this).
+        const char *tu = dict ? find_key(dict, "/TU") : NULL;
+        if (tu && (*tu == '(' || (*tu == '<' && tu[1] != '<'))) {
+            printf(",\n      \"label\": ");
+            json_value(tu);
+        }
+
         const char *type = "unknown";
         switch (map.items[i].ftype) {
             case 'T': type = "text"; break;
@@ -279,21 +378,52 @@ void extract_form_fields_json(FILE *f, const XRefTable *xref_table) {
             case 'C': type = "choice"; break;
             case 'S': type = "signature"; break;
         }
-        printf("\",\n      \"type\": \"%s\",\n      \"value\": ", type);
+        printf(",\n      \"type\": \"%s\",\n      \"value\": ", type);
         const char *v = dict ? find_key(dict, "/V") : NULL;
         json_value(v && !isdigit((unsigned char)*v) ? v : NULL);
 
+        // page: 1-based, resolved via the widget's presence in a page /Annots.
+        for (int j = 0; j < nmap; j++)
+            if (pmap[j].obj == map.items[i].obj_num) {
+                printf(",\n      \"page\": %d", pmap[j].page);
+                break;
+            }
+
+        // /Ff bit 1 = ReadOnly, bit 2 = Required (all field types).
+        printf(",\n      \"required\": %s,\n      \"readonly\": %s",
+               (flags & 2) ? "true" : "false",
+               (flags & 1) ? "true" : "false");
+
+        // maxlen: text fields only, when /MaxLen is present.
+        if (dict && map.items[i].ftype == 'T') {
+            const char *ml = find_key(dict, "/MaxLen");
+            if (ml && isdigit((unsigned char)*ml))
+                printf(",\n      \"maxlen\": %d", atoi(ml));
+        }
+
         if (dict && map.items[i].ftype == 'B') {
-            char on[128];
-            if (field_checkbox_on_state(f, (XRefTable *)xref_table, dict,
-                                        on, sizeof(on))) {
-                printf(",\n      \"on_state\": ");
-                json_pdf_text((const unsigned char *)on, strlen(on));
+            if (flags & 0x8000) {                       // radio group
+                char names[64][128];
+                int rn = field_radio_options(f, (XRefTable *)xref_table,
+                                             dict, names, 64);
+                if (rn > 0) {
+                    printf(",\n      \"options\": [");
+                    for (int j = 0; j < rn; j++) {
+                        if (j) fputs(", ", stdout);
+                        json_pdf_text((const unsigned char *)names[j], strlen(names[j]));
+                    }
+                    putchar(']');
+                }
+            } else {                                    // checkbox
+                char on[128];
+                if (field_checkbox_on_state(f, (XRefTable *)xref_table, dict,
+                                            on, sizeof(on))) {
+                    printf(",\n      \"on_state\": ");
+                    json_pdf_text((const unsigned char *)on, strlen(on));
+                }
             }
         }
         if (dict && map.items[i].ftype == 'C') {
-            const char *ff = find_key(dict, "/Ff");
-            int flags = ff ? atoi(ff) : 0;
             printf(",\n      \"combo\": %s,\n      \"multi_select\": %s",
                    (flags & 0x20000) ? "true" : "false",
                    (flags & 0x200000) ? "true" : "false");
@@ -313,8 +443,10 @@ void extract_form_fields_json(FILE *f, const XRefTable *xref_table) {
         printf("\n    }");
         free(dict);
     }
-    printf("\n  ],\n  \"count\": %d\n}\n", emitted);
+    printf("\n  ],\n  \"count\": %d,\n  \"xfa\": %s,\n  \"dynamic_xfa\": %s\n}\n",
+           emitted, xfa ? "true" : "false", dynamic_xfa ? "true" : "false");
 
+    free(pmap);
     field_map_free(&map);
     objstm_cache_reset();
 }
