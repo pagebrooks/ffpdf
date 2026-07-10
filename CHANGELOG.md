@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `fdf-extract` and `xfdf-extract` now emit each field's current `/V` value
   (strings, names, and multi-select arrays). Previously the value slot was
   always printed empty, despite the documentation saying otherwise.
+- Hardened two attacker-influenced allocation sites (CodeQL
+  `cpp/uncontrolled-allocation-size`): a stream's declared `/Length` is now
+  capped at the bytes remaining in the file before allocation (also avoiding
+  32-bit overflow on Windows), and the XFA datasets loader routes every
+  stream through the capped decoder instead of copying raw bytes unbounded.
 
 ## [0.1.0] - 2026-07-08
 
