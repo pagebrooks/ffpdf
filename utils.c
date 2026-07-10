@@ -375,12 +375,26 @@ static char *apply_predictor(const char *dict, char *data, size_t *len) {
 
 // Decompress a stream by its dictionary's filter (FlateDecode or LZWDecode) and
 // reverse any /Predictor declared in its /DecodeParms, so callers get the fully
-// decoded bytes. Returns malloc'd data or NULL (unsupported filter / error).
+// decoded bytes. A stream with no /Filter at all is legal PDF and passes
+// through raw; notably, ffpdf's own fill emits its appended xref stream
+// unfiltered. Returns malloc'd data or NULL (unsupported filter / error).
 char* decompress_stream(const char *dict, const char *data, size_t data_len, size_t *out_len) {
     char *dec;
     if (strstr(dict, "FlateDecode"))    dec = decompress_flate(data, data_len, out_len);
     else if (strstr(dict, "LZWDecode")) dec = decompress_lzw(data, data_len, out_len);
-    else return NULL;
+    else if (!strstr(dict, "/Filter")) {
+        // The raw path obeys the same caps as the decoders: the single-stream
+        // ceiling and the cumulative per-run budget. Without them a crafted
+        // /Length would drive an unbounded attacker-controlled allocation.
+        if (data_len > decompress_limit()) return NULL;
+        if (decompress_account(data_len) != 0) return NULL;
+        dec = malloc(data_len + 1);
+        if (!dec) return NULL;
+        memcpy(dec, data, data_len);
+        dec[data_len] = '\0';
+        *out_len = data_len;
+    }
+    else return NULL;                       // unsupported filter
     if (!dec) return NULL;
     return apply_predictor(dict, dec, out_len);
 }

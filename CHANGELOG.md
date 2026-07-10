@@ -5,6 +5,18 @@ All notable changes to ffpdf are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- ffpdf can now re-read PDFs it filled. Streams without a `/Filter` (legal
+  PDF, and exactly what fill emits for its appended cross-reference stream)
+  were rejected by the stream decoder, so every filled output failed to parse
+  with "Failed to parse xref table".
+- `fdf-extract` and `xfdf-extract` now emit each field's current `/V` value
+  (strings, names, and multi-select arrays). Previously the value slot was
+  always printed empty, despite the documentation saying otherwise.
+
 ## [0.1.0] - 2026-07-08
 
 Initial public release.

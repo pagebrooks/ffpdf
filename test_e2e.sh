@@ -106,6 +106,14 @@ for n, rn in enumerate(objs):
 assert b'/NeedAppearances true' in d, "NeedAppearances not set"
 PY
 
+echo "== fill output must be re-readable by ffpdf itself =="
+# The appended xref stream is unfiltered; decompress_stream once rejected any
+# stream without /Filter, so ffpdf could not parse its own output (found via
+# the radio-group exploration, 2026-07-09).
+$BIN fdf-extract "$TMP/filled.pdf" 2>/dev/null | grep -q "SMOKE_TEST_VALUE" \
+    && pass "round-trip: extract reads the filled value back" \
+    || fail "ffpdf cannot re-read its own fill output"
+
 echo "== CLI conventions (--, -o, stdin FDF) =="
 # '--' ends option parsing on every command (POSIX guideline 10).
 n=$($BIN fdf-extract -- "$PDF" 2>/dev/null | grep -c '^/T (')
@@ -397,6 +405,17 @@ PY
 crashcheck "crafted /W widths (OOB read)"        "$TMP/poc_w.pdf"
 crashcheck "ObjStm decreasing offsets (heap OF)" "$TMP/poc_objstm.pdf"
 crashcheck "encrypt huge /Length (stack OOB)"    "$TMP/poc_length.pdf"
+
+echo "== raw (no-/Filter) streams obey the decompression caps =="
+# The unfiltered-stream passthrough must honor PDF_MAX_DECOMPRESSED like the
+# real decoders (CodeQL: uncontrolled allocation size). ffpdf's own filled
+# output carries a raw xref stream larger than a 10-byte cap, so parsing it
+# must fail under that cap and succeed without it.
+if PDF_MAX_DECOMPRESSED=10 $BIN fdf-extract "$TMP/filled.pdf" >/dev/null 2>&1; then
+    fail "raw stream ignored PDF_MAX_DECOMPRESSED"
+else
+    pass "raw stream respects PDF_MAX_DECOMPRESSED"
+fi
 
 echo "== decompression bomb guard =="
 # A tiny file whose object stream inflates to ~2 MB. With a decompressed-size
