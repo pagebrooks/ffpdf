@@ -462,11 +462,17 @@ assert b[2:].decode('utf-16-be') == "go \U0001f600 \U0001f44d", "emoji value mis
 u = b[2:]  # a lead surrogate (0xD800-0xDBFF) must be present
 assert any(0xD8 <= u[i] <= 0xDB for i in range(0, len(u) - 1, 2)), "no surrogate pair"
 PY
-$BIN fields "$TMP/emoji.pdf" 2>/dev/null | python3 -c '
+# Read the fields output from a binary file (not sys.stdin) and decode UTF-8
+# explicitly: on Windows, sys.stdin text mode uses the console codepage, not
+# UTF-8, and mangles the multibyte emoji bytes. The two checks above already
+# proved the PDF holds the correct UTF-16BE bytes, so this isolates decode.
+$BIN fields "$TMP/emoji.pdf" 2>/dev/null > "$TMP/emoji.fields.json"
+python3 - "$TMP/emoji.fields.json" <<'PY' && pass "emoji: round-trips through fields (decode)" || fail "emoji decode wrong"
 import json, sys
-v = [x["value"] for x in json.load(sys.stdin)["fields"] if x["name"] == "myfield"][0]
+data = json.loads(open(sys.argv[1], "rb").read().decode("utf-8"))
+v = [x["value"] for x in data["fields"] if x["name"] == "myfield"][0]
 assert v == "go \U0001f600 \U0001f44d", repr(v)
-' && pass "emoji: round-trips through fields (decode)" || fail "emoji decode wrong"
+PY
 
 echo "== hybrid-reference file (/XRefStm) =="
 # A classic xref table (for legacy readers) plus a cross-reference stream at
