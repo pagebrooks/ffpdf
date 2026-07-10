@@ -355,7 +355,9 @@ static int parse_xref_section(FILE *f, long offset, XRefTable *xref_table, long 
     if (isdigit((unsigned char)token[0])) {            // cross-reference stream
         PdfObject xo = parse_obj_at_offset(f, offset, NULL);
         int ok = -1;
-        if (xo.stream && (strstr(xo.dictionary, "/FlateDecode") || strstr(xo.dictionary, "/LZWDecode"))) {
+        // decompress_stream handles Flate, LZW, and raw (no /Filter) streams;
+        // ffpdf's own fill appends its xref stream unfiltered.
+        if (xo.stream) {
             size_t dl;
             char *dec = decompress_stream(xo.dictionary, xo.stream, xo.stream_len, &dl);
             if (dec && dl > 0) {

@@ -106,6 +106,14 @@ for n, rn in enumerate(objs):
 assert b'/NeedAppearances true' in d, "NeedAppearances not set"
 PY
 
+echo "== fill output must be re-readable by ffpdf itself =="
+# The appended xref stream is unfiltered; decompress_stream once rejected any
+# stream without /Filter, so ffpdf could not parse its own output (found via
+# the radio-group exploration, 2026-07-09).
+$BIN fdf-extract "$TMP/filled.pdf" 2>/dev/null | grep -q "SMOKE_TEST_VALUE" \
+    && pass "round-trip: extract reads the filled value back" \
+    || fail "ffpdf cannot re-read its own fill output"
+
 echo "== CLI conventions (--, -o, stdin FDF) =="
 # '--' ends option parsing on every command (POSIX guideline 10).
 n=$($BIN fdf-extract -- "$PDF" 2>/dev/null | grep -c '^/T (')
