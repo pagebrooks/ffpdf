@@ -161,6 +161,21 @@ docs/demo-batch.gif: docs/demo-batch.tape docs/demo-template.fdf docs/demo-custo
 	  { echo "vhs not found -- install it (and ttyd + ffmpeg): https://github.com/charmbracelet/vhs"; exit 1; }
 	vhs docs/demo-batch.tape
 
+# ---- README example form ----
+# The worked example linked from the README: a styled fillable form, the FDF
+# with the answers, and the filled result produced by ffpdf itself. All three
+# are committed; this regenerates them when the generator or answers change.
+examples: docs/example-form.pdf docs/example-filled.pdf docs/example-flattened.pdf
+
+docs/example-form.pdf: docs/gen-example-form.py
+	python3 docs/gen-example-form.py $@
+
+docs/example-filled.pdf: docs/example-form.pdf docs/example-answers.fdf $(TARGET)
+	./$(TARGET) fill -o $@ docs/example-answers.fdf docs/example-form.pdf
+
+docs/example-flattened.pdf: docs/example-form.pdf docs/example-answers.fdf $(TARGET)
+	./$(TARGET) fill --flatten -o $@ docs/example-answers.fdf docs/example-form.pdf
+
 # ---- Install ----
 PREFIX  ?= /usr/local
 BINDIR   = $(DESTDIR)$(PREFIX)/bin
@@ -183,4 +198,4 @@ clean:
 
 rebuild: clean all
 
-.PHONY: all clean test test-e2e check check-version rebuild asan fuzz sbom bump demo install uninstall
+.PHONY: all clean test test-e2e check check-version rebuild asan fuzz sbom bump demo examples install uninstall

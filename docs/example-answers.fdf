@@ -1,0 +1,21 @@
+%FDF-1.2
+1 0 obj
+<< /FDF << /Fields [
+  << /T (FullName)         /V (Avery Whitfield) >>
+  << /T (DateOfBirth)      /V (1987-03-14) >>
+  << /T (Email)            /V (avery.whitfield@example.com) >>
+  << /T (Phone)            /V (555 014-2288) >>
+  << /T (StreetAddress)    /V (1420 Harborview Lane, Apt 6C) >>
+  << /T (City)             /V (Portsmouth) >>
+  << /T (State)            /V (NH) >>
+  << /T (Zip)              /V (03801) >>
+  << /T (PolicyNumber)     /V (MM-88214-0067) >>
+  << /T (CoverageType)     /V (Home) >>
+  << /T (AdditionalCoverages) /V [(Flood) (Identity theft)] >>
+  << /T (SignatureDate)    /V (2026-07-09) >>
+  << /T (PaperlessBilling) /V (Yes) >>
+] >> >>
+endobj
+trailer
+<< /Root 1 0 R >>
+%%EOF
