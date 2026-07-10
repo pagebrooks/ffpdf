@@ -60,5 +60,17 @@ Out of scope:
   self-cleaning temp files; see the datasheet), and filled values (potential
   PHI/PII) are **not** written to logs by default.
 
+## A note on cryptography
+
+Security scanners will flag that ffpdf implements **RC4**. That is expected
+and deliberate: the PDF standard security handler mandates RC4 for legacy
+(R2/R3) encrypted documents, which are still common among older government
+and bank forms, so reading them requires implementing it. ffpdf never
+*chooses* an algorithm: decryption uses whatever the document specifies, and
+an incremental update must encrypt its appended objects with the document's
+existing scheme (changing it would require rewriting the file). Modern
+documents use the AES-128/AES-256 paths. ffpdf is not a password cracker;
+only the empty user password is supported.
+
 For privacy/PHI deployment guidance, see
 [`docs/SECURITY-PRIVACY.md`](docs/SECURITY-PRIVACY.md).
