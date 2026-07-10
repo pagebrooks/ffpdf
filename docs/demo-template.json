@@ -1,0 +1,6 @@
+{
+  "Address": "${ADDRESS}",
+  "City":    "${CITY}",
+  "State":   "${STATE}",
+  "Zip":     "${ZIP}"
+}

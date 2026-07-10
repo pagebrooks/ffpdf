@@ -4,14 +4,14 @@
 [![License](https://img.shields.io/github/license/pagebrooks/ffpdf)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/pagebrooks/ffpdf)](https://github.com/pagebrooks/ffpdf/releases/latest)
 
-**ffpdf** is a small, fast command-line tool for **reading and filling PDF form fields**. It is written in plain C with no dependency beyond zlib. No Java, no pdftk, no headless browser. Point it at a PDF, hand it a list of values, and it writes a filled PDF to stdout.
+**ffpdf** is a small, fast command-line tool for **reading and filling PDF form fields**, with a **JSON in / JSON out** contract that scripts and AI agents can drive. It is written in plain C with no dependency beyond zlib: no Java, no pdftk, no headless browser. Ask it what fields a form has, hand back the values as JSON, and it writes a filled PDF.
 
 ![ffpdf demo: discover fields, fill the form, get a valid PDF](docs/demo.gif)
 
 It’s built to handle real-world PDFs: government forms, bank documents, LiveCycle/XFA forms, and encrypted “secured” PDFs, not just clean textbook files.
 
 ```console
-$ ./ffpdf fill form.pdf answers.fdf > filled.pdf
+$ ./ffpdf fill form.pdf values.json > filled.pdf
 ```
 
 ---
@@ -22,6 +22,7 @@ Most "fill a PDF form" tools drag in a huge runtime or require commercial licens
 
 - **Starts instantly and stays small.** Filling streams the original file straight through and only buffers the bytes it appends, so memory stays proportional to *your changes*, not the file size. A 22 MB PDF parses in a fraction of a second.
 - **Preserves the original.** Fills are written as a PDF *incremental update*: the original bytes are copied verbatim and the changes are appended. Nothing is silently rewritten.
+- **Scriptable and agent-friendly.** `fields` lists a form's fields as JSON (names, types, options, constraints); `fill` takes the values back as JSON and reports the outcome as JSON with a meaningful exit code. No FDF knowledge required. (FDF is still supported and auto-detected, handy if you already work with FDF or pdftk.)
 - **Handles the hard cases** (encryption, XFA, compressed object streams, weird cross-reference layouts).
 - **Made for the thousand-PDF loop.** With no runtime to start, a fill is just a process exec: ~600 real forms per second on one core. See [Filling PDFs by the thousands](#filling-pdfs-by-the-thousands).
 
@@ -33,67 +34,58 @@ Most "fill a PDF form" tools drag in a huge runtime or require commercial licens
 # 1. Build it (needs gcc and zlib)
 make
 
-# 2. See what fields a form has
-./ffpdf fdf-extract form.pdf
+# 2. See what fields a form has (as JSON)
+./ffpdf fields form.pdf
 
-# 3. Fill it
-./ffpdf fill form.pdf answers.fdf > filled.pdf
+# 3. Fill it from a JSON object of values
+./ffpdf fill form.pdf values.json > filled.pdf
 ```
 
-That’s the whole loop: **discover → edit → fill.**
+That’s the whole loop: **discover → fill → verify**, all in JSON.
 
 ### A complete example
 
 Say `form.pdf` has a text field named `applicant_name` and a checkbox named `agree`.
 
-**1. Discover the field names** with `fdf-extract` (it prints an FDF listing every field):
+**1. Discover the fields** with `fields`. The JSON gives each field's name and type, and — for checkboxes and choice fields — the values it accepts:
 
 ```console
-$ ./ffpdf fdf-extract form.pdf
-%FDF-1.2
-1 0 obj
-<<
-/FDF
-<<
-/Fields [
-<<
-/T (applicant_name)
-/V ()
->>
-<<
-/T (agree)
-/V ()
->>
-]
-...
+$ ./ffpdf fields form.pdf
+{
+  "fields": [
+    { "name": "applicant_name", "type": "text",   "value": "",    "required": false, "readonly": false },
+    { "name": "agree",          "type": "button", "value": "Off", "required": false, "readonly": false, "on_state": "Yes" }
+  ],
+  "count": 2,
+  "xfa": false,
+  "dynamic_xfa": false
+}
 ```
 
-Each field is a `<< /T (name) /V (current value) >>` block; the `/T` is the name you fill by.
+The `on_state` says `agree` is checked by the value `Yes` (or simply `true`).
 
-**2. Write your answers** into a small FDF file, `answers.fdf`:
+**2. Write your answers** as a JSON object keyed by field name, `values.json`:
 
-```
-%FDF-1.2
-1 0 obj
-<< /FDF << /Fields [
-  << /T (applicant_name) /V (Ada Lovelace) >>
-  << /T (agree) /V (Yes) >>
-] >> >>
-endobj
-trailer
-<< /Root 1 0 R >>
-%%EOF
+```json
+{
+  "applicant_name": "Ada Lovelace",
+  "agree": true
+}
 ```
 
-**3. Fill:**
+**3. Fill and verify:**
 
 ```console
-$ ./ffpdf fill form.pdf answers.fdf > filled.pdf
+$ ./ffpdf fill --strict -o filled.pdf form.pdf values.json
+$ echo $?
+0
 ```
 
-Open `filled.pdf`: the name is typed in and the box is checked. The tool figures out the right on‑state for the checkbox, generates the visual appearance so the values show in *any* viewer, and (for dynamic XFA forms) also updates the XFA data packet so Adobe renders it too.
+Open `filled.pdf`: the name is typed in and the box is checked. The tool picks the right on‑state for the checkbox, generates the visual appearance so the values show in *any* viewer, and (for dynamic XFA forms) also updates the XFA data packet so Adobe renders it too. `--strict` makes it exit non‑zero if any value failed to match a field, so a script can trust the outcome without parsing output.
 
-> **Tip:** field names can be long and nested (e.g. `topmostSubform[0].Page1[0].f1_1[0]`). You can use the full name from `fdf-extract`, or just the last `.`-separated piece if it’s unique.
+> **Tip:** field names can be long and nested (e.g. `topmostSubform[0].Page1[0].f1_1[0]`). Use the full name from `fields`, or just the last `.`-separated piece if it’s unique.
+>
+> Prefer PDF‑native **FDF**? `fill` takes that too; it's auto‑detected, and handy if you already work with FDF or pdftk. See [batch fills](#filling-pdfs-by-the-thousands).
 
 ### See it on a real form
 
@@ -121,31 +113,25 @@ $ ffpdf fill -o example-filled.pdf example-form.pdf example-answers.fdf
 $ ffpdf fill --flatten -o example-flattened.pdf example-form.pdf example-answers.fdf
 ```
 
-The PDFs in the repo were produced by ffpdf itself (`make examples` regenerates all of them), and the values are visible in any viewer because fill generates the visual appearance streams rather than relying on the viewer to draw them.
+The values here are held in an FDF (`example-answers.fdf`); the same fill works from an equivalent JSON object — `fill` auto-detects the format. The PDFs in the repo were produced by ffpdf itself (`make examples` regenerates all of them), and the values are visible in any viewer because fill generates the visual appearance streams rather than relying on the viewer to draw them.
 
 ---
 
 ## Filling PDFs by the thousands
 
-Where this tool really earns its keep is **batch filling**. An FDF is plain text, so the file `fdf-extract` gave you is one search-and-replace away from being a **template**. And because ffpdf is a ~100 KB binary with no runtime to warm up, invoking it once per record costs almost nothing.
+Filling one form is easy; the payoff is filling **thousands**. Because ffpdf is a ~100 KB binary with no runtime to warm up, invoking it once per record costs almost nothing. The pattern is a shell loop over your data, one `fill` per row, each writing its own output file, with the values for each record supplied as JSON.
 
-![ffpdf bulk-fill (mail-merge) demo: a CSV plus an FDF template renders one filled PDF per record](docs/demo-batch.gif)
+![ffpdf bulk-fill (mail-merge) demo: a CSV plus a JSON template renders one filled PDF per record](docs/demo-batch.gif)
 
-Turn the extracted FDF into a template by putting placeholders where the values go:
+The quick path turns a JSON object into a **template** with placeholders where the values go:
 
-```
-%FDF-1.2
-1 0 obj
-<< /FDF << /Fields [
-  << /T (Address) /V (${ADDRESS}) >>
-  << /T (City)    /V (${CITY}) >>
-  << /T (State)   /V (${STATE}) >>
-  << /T (Zip)     /V (${ZIP}) >>
-] >> >>
-endobj
-trailer
-<< /Root 1 0 R >>
-%%EOF
+```json
+{
+  "Address": "${ADDRESS}",
+  "City":    "${CITY}",
+  "State":   "${STATE}",
+  "Zip":     "${ZIP}"
+}
 ```
 
 then loop over your data; `envsubst` (from gettext) does the substitution:
@@ -153,19 +139,21 @@ then loop over your data; `envsubst` (from gettext) does the substitution:
 ```bash
 while IFS=, read -r ADDRESS CITY STATE ZIP; do
   export ADDRESS CITY STATE ZIP
-  envsubst < template.fdf | ffpdf fill -o "out/$ZIP-$CITY.pdf" form.pdf -
+  envsubst < template.json | ffpdf fill -o "out/$ZIP-$CITY.pdf" form.pdf -
 done < customers.csv
 ```
 
-(`-` reads the FDF straight from the pipe, with no intermediate file to manage, and `-o` writes each PDF **atomically**, so a killed job never leaves partial files in `out/`.)
+(`-` reads the values straight from the pipe, with no intermediate file to manage, and `-o` writes each PDF **atomically**, so a killed job never leaves partial files in `out/`.)
 
 Measured on a single ordinary core: **1,000 filled PDFs in about a second** for a small form, and **~600 fills/second on a real 74 KB IRS form**, roughly 36,000 a minute before you even reach for `xargs -P`. The per-invocation startup cost that makes JVM-based tools painful in this loop simply isn’t there.
 
-Two practical notes:
+A few practical notes:
 
-- **Escape your data.** `(`, `)` and `\` inside a value must be backslash-escaped in FDF strings, e.g. `/V (Smith \(Jr\))`.
-- **Multi-select fields take an array.** A list box that accepts several values is filled with `/V [(opt1) (opt2)]` (the `fields` output flags these with `"multi_select": true` and lists the valid `options`).
+- **For messy data, generate the JSON instead of templating it.** `envsubst` is plain text substitution, so a value containing `"` or a backslash will break the JSON. When your data is untrusted or may contain quotes, build each object with a real serializer (`jq -n --arg city "$CITY" '{City: $city}'`, or your language's JSON library), which escapes correctly. The template above is the quick path for clean data.
+- **Multi-select fields take an array.** A list box that accepts several values is filled with `["opt1", "opt2"]` (the `fields` output flags these with `"multi_select": true` and lists the valid `options`).
 - **Parallelize trivially.** Every fill is an independent process with no shared state: split the input and run N loops, or hand the whole thing to `xargs -P`/GNU `parallel`.
+
+**Already have FDF?** `fill` auto-detects it, so the very same loop works with an FDF template (`envsubst < template.fdf | ...`). That's the natural choice when you interoperate with pdftk or a system that already emits FDF; just remember FDF strings need `(`, `)` and `\` backslash-escaped.
 
 ---
 
@@ -197,19 +185,7 @@ $ echo $?
 
 Exit codes: **0** success · **1** bad usage or unreadable PDF · **2** nothing matched (no output) · **3** `--strict` and some field didn't match.
 
-**Filling from JSON (no FDF).** The `<values>` file can be a JSON object in the same shape `fields` emits, auto-detected, so an agent can close the discover-then-fill loop in one format without ever authoring FDF. Each key is a field's `name` (exactly as `fields` reports it), and the value's *type* says how to fill it:
-
-```json
-{
-  "FullName": "Avery Whitfield",
-  "State": "NH",
-  "Zip": 3801,
-  "CoverageType": "Home",
-  "AdditionalCoverages": ["Flood", "Identity theft"],
-  "PaperlessBilling": true,
-  "Email": null
-}
-```
+**JSON values reference.** The `<values>` file is a flat JSON object keyed by field name (the shape `fields` emits — see the [worked example](#a-complete-example)). The value's *type* selects the fill behaviour:
 
 | JSON value | Fills |
 |---|---|
@@ -218,14 +194,6 @@ Exit codes: **0** success · **1** bad usage or unreadable PDF · **2** nothing 
 | **number** | used verbatim as text — handy for ZIPs and IDs (`3801` → `"3801"`) |
 | **`true` / `false`** | checks / clears a checkbox (mapped to its real on-state) |
 | **`null`** | skipped — the field is left as-is |
-
-The whole discover → fill → verify loop stays in JSON:
-
-```console
-$ ffpdf fields form.pdf > fields.json     # discover names, types, options
-$ # ... produce values.json from fields.json ...
-$ ffpdf fill --json --strict -o out.pdf form.pdf values.json   # fill + verify
-```
 
 `values.json` may be `-` to read from stdin. String values are UTF-8 (or `\uXXXX` escapes), so `"Zoë 😀"` round-trips correctly. A value longer than a text field's `/MaxLen` is truncated to fit, with a warning (and is listed under `truncated` in the `--json` result).
 
