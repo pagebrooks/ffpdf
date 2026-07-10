@@ -1,0 +1,9 @@
+# PDF fixtures are byte-exact: their xref tables store absolute byte offsets,
+# so any line-ending translation corrupts them. The hand-built example form
+# contains no NUL bytes, so git's text heuristic would otherwise CRLF-convert
+# it on Windows checkouts (caused a Windows-only e2e failure).
+*.pdf binary
+
+# FDF is plain text that ffpdf reads byte-wise; keep it diffable but never
+# translated.
+*.fdf -text

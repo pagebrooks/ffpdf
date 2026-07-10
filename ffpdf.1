@@ -14,6 +14,10 @@ ffpdf \- extract and fill PDF form fields
 .I pdf
 .br
 .B ffpdf
+.B fields
+.I pdf
+.br
+.B ffpdf
 .B fill
 .RB [ \-f | \-\-flatten ]
 .RB [ \-o
@@ -71,6 +75,20 @@ As
 but emit the field list as an
 .B XFDF
 (XML) document instead.
+.TP
+.BI fields " pdf"
+List every fillable field as
+.B JSON
+on standard output: each field's fully-qualified name, type
+.RB ( text ,
+.BR button ,
+.BR choice ,
+.BR signature ),
+and current value, plus a choice field's options and combo/multi-select flags
+and a checkbox's on-state name. This is the machine-readable companion to
+.BR fdf-extract ,
+intended for scripts and AI agents that need to know what a form accepts
+before filling it.
 .TP
 .BI fill " \fR[\fP\-f\fR|\fP\-\-flatten\fR] [\fP\-o \fIfile\fR] [\fP\-\-\fR]\fP fdf pdf"
 Fill

@@ -74,7 +74,8 @@ $(TARGET): $(OBJECTS)
 UNIT_TEST = test_field_map$(EXEEXT)
 # test_field_map.c #includes field_map.c, so link the *other* objects it needs
 # (parse_obj_at_offset, decompress_flate, ...) but NOT field_map.o.
-UNIT_TEST_DEPS = utils.o pdf_lex.o pdf_parser.o form_extractor.o xfa.o crypto.o
+UNIT_TEST_DEPS = utils.o pdf_lex.o pdf_parser.o form_extractor.o xfa.o crypto.o \
+                 pdf_filler.o os_compat.o   # form_extractor's fields-JSON uses pdf_filler helpers
 
 $(UNIT_TEST): test_field_map.c field_map.c $(HEADERS) $(UNIT_TEST_DEPS)
 	$(CC) $(CFLAGS) test_field_map.c $(UNIT_TEST_DEPS) -o $(UNIT_TEST) $(LDFLAGS)

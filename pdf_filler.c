@@ -373,8 +373,8 @@ static void append_appearance_stream(Buf *out, const PdfCrypt *crypt, int ap_obj
 // display text: the 2nd element of an [export display] pair, else the string).
 // Returns the count (<= max), or -1 if any option is not WinAnsi-representable
 // (so the caller skips the list-box appearance and relies on /NeedAppearances).
-static int choice_displays(FILE *f, XRefTable *xref, const char *dict,
-                           char disp[][256], int max) {
+int field_choice_options(FILE *f, XRefTable *xref, const char *dict,
+                         char disp[][256], int max) {
     char *opt = field_array_text(f, xref, dict, "/Opt");
     if (!opt) return 0;
     int n = 0;
@@ -537,7 +537,7 @@ static int first_non_off_key(const char *d, char *out, size_t cap) {
 // (e.g. "1", "2", "Yes"). /AP and /N may each be inline or an indirect ref.
 // Returns 1 and fills `out` if found (single-widget checkboxes only; radio-group
 // parents have no /AP and fall back to the caller-supplied value).
-static int checkbox_on_state(FILE *f, XRefTable *xref, const char *dict, char *out, size_t cap) {
+int field_checkbox_on_state(FILE *f, XRefTable *xref, const char *dict, char *out, size_t cap) {
     const char *ap = find_key(dict, "/AP");
     if (!ap) return 0;
     char *apbuf = NULL;
@@ -571,7 +571,7 @@ static void resolve_button_state(FILE *f, XRefTable *xref, const char *dict,
     for (size_t i = 0; i < sizeof(offs) / sizeof(offs[0]); i++)
         if (strcmp(value, offs[i]) == 0) { snprintf(out, cap, "Off"); return; }
     char on[128];
-    if (checkbox_on_state(f, xref, dict, on, sizeof(on))) snprintf(out, cap, "%s", on);
+    if (field_checkbox_on_state(f, xref, dict, on, sizeof(on))) snprintf(out, cap, "%s", on);
     else snprintf(out, cap, "%s", value);
 }
 
@@ -1034,7 +1034,7 @@ static void emit_filled_field(FillCtx *c, FieldMap *map, FdfData *fdf, int i, Fi
         rect_wh(fodict, &aw, &ah)) {
         ldisp = malloc(128 * 256);
         if (ldisp) {
-            lnopt = choice_displays(c->f, c->xref, fodict, ldisp, 128);
+            lnopt = field_choice_options(c->f, c->xref, fodict, ldisp, 128);
             if (lnopt > 0) {
                 if (fdf->fields[i].nvalues > 1) {         // multi-select
                     for (int j = 0; j < fdf->fields[i].nvalues && lnsel < 64; j++) {

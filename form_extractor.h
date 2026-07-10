@@ -21,4 +21,9 @@
 void extract_form_fields_fdf(FILE *f, const XRefTable *xref_table);
 void extract_form_fields_xfdf(FILE *f, const XRefTable *xref_table);
 
+// The `fields` command: list every fillable field as JSON (name, type, current
+// value, and per-type extras: a choice field's options and combo/multi-select
+// flags, a checkbox's on-state). Designed for programmatic callers.
+void extract_form_fields_json(FILE *f, const XRefTable *xref_table);
+
 #endif // FORM_EXTRACTOR_H

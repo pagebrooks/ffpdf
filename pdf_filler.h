@@ -47,6 +47,17 @@ int fill_pdf_with_fdf(const char *pdf_filename, const char *fdf_filename, FILE *
 // XFA) is removed, producing a non-editable ("flattened") PDF.
 int fill_pdf_with_fdf_ex(const char *pdf_filename, const char *fdf_filename, FILE *out, int flatten);
 
+// Field-introspection helpers shared with the `fields` command (JSON listing).
+// field_choice_options fills disp[] with a choice field's option display texts
+// (the strings fill's /Opt matching accepts); returns the count, 0 when /Opt is
+// absent, or -1 when an option is not WinAnsi-representable.
+// field_checkbox_on_state finds a checkbox widget's non-/Off appearance-state
+// name; returns 1 and fills `out` when found.
+int field_choice_options(FILE *f, XRefTable *xref, const char *dict,
+                         char disp[][256], int max);
+int field_checkbox_on_state(FILE *f, XRefTable *xref, const char *dict,
+                            char *out, size_t cap);
+
 // FDF parsing (exposed for testing).
 FdfData *parse_fdf_file(const char *fdf_filename);
 void free_fdf_data(FdfData *fdf_data);
