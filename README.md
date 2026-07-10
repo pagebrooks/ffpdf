@@ -97,7 +97,13 @@ Open `filled.pdf`: the name is typed in and the box is checked. The tool figures
 
 ### See it on a real form
 
-Prefer to look at files instead? The `docs/` folder carries a worked example you can open right in your browser:
+One `ffpdf fill` command turns the blank form on the left into the completed one on the right:
+
+| Blank form | Filled by ffpdf |
+|:---:|:---:|
+| ![The unfilled example form](docs/example-form.png) | ![The same form filled by ffpdf: text, dropdown, list selections, and checkbox all set](docs/example-filled.png) |
+
+The `docs/` folder carries the actual files, which you can open right in your browser:
 
 | File | What it is |
 |---|---|

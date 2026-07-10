@@ -165,7 +165,20 @@ docs/demo-batch.gif: docs/demo-batch.tape docs/demo-template.fdf docs/demo-custo
 # The worked example linked from the README: a styled fillable form, the FDF
 # with the answers, and the filled result produced by ffpdf itself. All three
 # are committed; this regenerates them when the generator or answers change.
-examples: docs/example-form.pdf docs/example-filled.pdf docs/example-flattened.pdf
+examples: docs/example-form.pdf docs/example-filled.pdf docs/example-flattened.pdf \
+          docs/example-form.png docs/example-filled.png
+
+# PNG renders embedded in the README so the before/after is visible without
+# GitHub's PDF viewer (which some browser privacy settings block).
+docs/example-form.png: docs/example-form.pdf
+	@command -v pdftoppm >/dev/null || \
+	  { echo "pdftoppm not found -- install poppler-utils"; exit 1; }
+	pdftoppm -png -r 110 -singlefile docs/example-form.pdf docs/example-form
+
+docs/example-filled.png: docs/example-filled.pdf
+	@command -v pdftoppm >/dev/null || \
+	  { echo "pdftoppm not found -- install poppler-utils"; exit 1; }
+	pdftoppm -png -r 110 -singlefile docs/example-filled.pdf docs/example-filled
 
 docs/example-form.pdf: docs/gen-example-form.py
 	python3 docs/gen-example-form.py $@
