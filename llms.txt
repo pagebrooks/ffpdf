@@ -1,0 +1,39 @@
+# ffpdf
+
+> A ~100 KB command-line tool in C for reading and filling PDF form fields
+> (AcroForm). Only dependency: zlib. Fills text, checkbox, and choice fields,
+> syncs XFA data packets, handles encrypted PDFs (empty user password), and
+> writes fills as incremental updates. Built for batch use: roughly 600 form
+> fills per second per core, with no runtime to start.
+
+Key commands: `ffpdf fields form.pdf` lists all fields as JSON (names, types,
+current values, choice options, checkbox on-states). `ffpdf fill answers.fdf
+form.pdf > out.pdf` fills a form from a plain-text FDF; `-o FILE` writes
+atomically, `-` reads the FDF from stdin, `--flatten` bakes values in and
+removes the form. Exit code 0 on success, 1 on error; diagnostics go to
+stderr, output to stdout.
+
+Install: download a static binary archive from
+https://github.com/pagebrooks/ffpdf/releases (Linux, macOS, Windows), or
+build from source with `make` (needs gcc and zlib).
+
+## Documentation
+
+- [README](https://github.com/pagebrooks/ffpdf/blob/main/README.md): full
+  guide with a worked example and the bulk-fill (mail-merge) batch pattern
+- [Man page](https://github.com/pagebrooks/ffpdf/blob/main/ffpdf.1): complete
+  command and option reference
+- [Security datasheet](https://github.com/pagebrooks/ffpdf/blob/main/docs/SECURITY-PRIVACY.md):
+  data handling, no network access, PHI guidance
+
+## Examples
+
+- [Example form](https://github.com/pagebrooks/ffpdf/blob/main/docs/example-form.pdf):
+  unfilled form exercising every field type
+- [Example FDF](https://github.com/pagebrooks/ffpdf/blob/main/docs/example-answers.fdf):
+  the values file format, including a multi-select array
+
+## Optional
+
+- [CHANGELOG](https://github.com/pagebrooks/ffpdf/blob/main/CHANGELOG.md): release history
+- [CONTRIBUTING](https://github.com/pagebrooks/ffpdf/blob/main/CONTRIBUTING.md): build, test, DCO sign-off

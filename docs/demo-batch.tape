@@ -1,4 +1,4 @@
-# VHS tape for the mail-merge demo GIF (https://github.com/charmbracelet/vhs).
+# VHS tape for the bulk-fill (mail-merge) demo GIF (https://github.com/charmbracelet/vhs).
 # Regenerate from the repo root with `make demo` (needs vhs + ttyd + ffmpeg,
 # pdftotext, envsubst, and a built ./ffpdf).
 #
@@ -15,7 +15,7 @@ Set WindowBar Colorful
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 40ms
 
-Type "# mail merge: fill one form for every row of a CSV"
+Type "# bulk fill: one form for every row of a CSV"
 Enter
 Enter
 Sleep 500ms

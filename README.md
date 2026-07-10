@@ -129,7 +129,7 @@ The PDFs in the repo were produced by ffpdf itself (`make examples` regenerates 
 
 Where this tool really earns its keep is **batch filling**. An FDF is plain text, so the file `fdf-extract` gave you is one search-and-replace away from being a **template**. And because ffpdf is a ~100 KB binary with no runtime to warm up, invoking it once per record costs almost nothing.
 
-![ffpdf mail-merge demo: a CSV plus an FDF template renders one filled PDF per record](docs/demo-batch.gif)
+![ffpdf bulk-fill (mail-merge) demo: a CSV plus an FDF template renders one filled PDF per record](docs/demo-batch.gif)
 
 Turn the extracted FDF into a template by putting placeholders where the values go:
 
