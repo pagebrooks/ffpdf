@@ -95,6 +95,24 @@ Open `filled.pdf`: the name is typed in and the box is checked. The tool figures
 
 > **Tip:** field names can be long and nested (e.g. `topmostSubform[0].Page1[0].f1_1[0]`). You can use the full name from `fdf-extract`, or just the last `.`-separated piece if it’s unique.
 
+### See it on a real form
+
+Prefer to look at files instead? The `docs/` folder carries a worked example you can open right in your browser:
+
+| File | What it is |
+|---|---|
+| [`example-form.pdf`](docs/example-form.pdf) | The unfilled form: a realistic one-page application exercising every field type (text fields, a checkbox, a combo box, a multi-select list box, and a signature field) |
+| [`example-answers.fdf`](docs/example-answers.fdf) | The plain-text FDF holding the values, including a multi-select array |
+| [`example-filled.pdf`](docs/example-filled.pdf) | The result: text filled, box checked, dropdown set, both list selections highlighted. The signature field stays empty (a signature is not a fillable value), and the form is still editable |
+| [`example-flattened.pdf`](docs/example-flattened.pdf) | The `--flatten` result: looks identical, but the values are baked into the page and the form is gone (nothing left to edit) |
+
+```console
+$ ffpdf fill -o example-filled.pdf example-answers.fdf example-form.pdf
+$ ffpdf fill --flatten -o example-flattened.pdf example-answers.fdf example-form.pdf
+```
+
+The PDFs in the repo were produced by ffpdf itself (`make examples` regenerates all of them), and the values are visible in any viewer because fill generates the visual appearance streams rather than relying on the viewer to draw them.
+
 ---
 
 ## Filling PDFs by the thousands
