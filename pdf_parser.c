@@ -268,8 +268,11 @@ PdfObject parse_obj_at_offset(FILE *f, long offset, const PdfCrypt *crypt) {
         // Preferred: a direct-integer /Length, trusted only when "endstream"
         // actually follows it (encrypted/binary data can contain the keyword).
         // This path is independent of the file's line-ending style.
+        // /Length is attacker-declared: cap it at the bytes that actually
+        // remain in the file before using it for seeks or allocation (also
+        // avoids 32-bit long overflow of stream_start + L on LLP64 Windows).
         long L = pdf_direct_length(obj.dictionary);
-        if (L >= 0) {
+        if (L >= 0 && L <= file_end - stream_start) {
             fseek(f, stream_start + L, SEEK_SET);
             char probe[16];
             size_t pg = fread(probe, 1, sizeof(probe) - 1, f);
@@ -311,6 +314,7 @@ PdfObject parse_obj_at_offset(FILE *f, long offset, const PdfCrypt *crypt) {
             }
         }
 
+        if (len > file_end - stream_start) len = file_end - stream_start;
         if (len >= 0) {
             obj.stream_len = len;
             fseek(f, stream_start, SEEK_SET);

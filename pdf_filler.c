@@ -842,17 +842,16 @@ static char *load_datasets_xml(FILE *f, XRefTable *xref, int obj) {
     PdfObject o = parse_obj_at_offset(f, off, pdf_doc_crypt());
     char *xml = NULL;
     if (o.stream && o.stream_len > 0) {
-        if (strstr(o.dictionary, "FlateDecode") || strstr(o.dictionary, "LZWDecode")) {
-            size_t dl;
-            char *dec = decompress_stream(o.dictionary, o.stream, o.stream_len, &dl);
-            if (dec) {
-                xml = malloc(dl + 1);
-                if (xml) { memcpy(xml, dec, dl); xml[dl] = '\0'; }
-                free(dec);
-            }
-        } else {
-            xml = malloc(o.stream_len + 1);
-            if (xml) { memcpy(xml, o.stream, o.stream_len); xml[o.stream_len] = '\0'; }
+        // decompress_stream handles Flate, LZW, and raw (no-/Filter) streams
+        // and applies the decompression caps, so the resulting size is always
+        // bounded. Streams with an unsupported filter yield NULL (they could
+        // never parse as XML anyway).
+        size_t dl;
+        char *dec = decompress_stream(o.dictionary, o.stream, o.stream_len, &dl);
+        if (dec) {
+            xml = malloc(dl + 1);
+            if (xml) { memcpy(xml, dec, dl); xml[dl] = '\0'; }
+            free(dec);
         }
     }
     free(o.stream);
