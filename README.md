@@ -97,11 +97,15 @@ Open `filled.pdf`: the name is typed in and the box is checked. The tool figures
 
 ### See it on a real form
 
-One `ffpdf fill` command turns the blank form on the left into the completed one on the right:
+Start with a blank form:
 
-| Blank form | Filled by ffpdf |
+![The unfilled example form](docs/example-form.png)
+
+One `ffpdf fill` command produces the filled version on the left; adding `--flatten` produces the right one, with the same values baked permanently into the page and no interactive form left to edit:
+
+| Filled by ffpdf | Filled with `--flatten` |
 |:---:|:---:|
-| ![The unfilled example form](docs/example-form.png) | ![The same form filled by ffpdf: text, dropdown, list selections, and checkbox all set](docs/example-filled.png) |
+| ![The form filled by ffpdf: text, dropdown, list selections, and checkbox all set, still editable](docs/example-filled.png) | ![The flattened result: the values baked into the page content, with the form removed](docs/example-flattened.png) |
 
 The `docs/` folder carries the actual files, which you can open right in your browser:
 
@@ -110,7 +114,7 @@ The `docs/` folder carries the actual files, which you can open right in your br
 | [`example-form.pdf`](docs/example-form.pdf) | The unfilled form: a realistic one-page application exercising every field type (text fields, a checkbox, a combo box, a multi-select list box, and a signature field) |
 | [`example-answers.fdf`](docs/example-answers.fdf) | The plain-text FDF holding the values, including a multi-select array |
 | [`example-filled.pdf`](docs/example-filled.pdf) | The result: text filled, box checked, dropdown set, both list selections highlighted. The signature field stays empty (a signature is not a fillable value), and the form is still editable |
-| [`example-flattened.pdf`](docs/example-flattened.pdf) | The `--flatten` result: looks identical, but the values are baked into the page and the form is gone (nothing left to edit) |
+| [`example-flattened.pdf`](docs/example-flattened.pdf) | The `--flatten` result: the same values baked into the page content, with the form removed (nothing left to edit) |
 
 ```console
 $ ffpdf fill -o example-filled.pdf example-answers.fdf example-form.pdf
