@@ -47,6 +47,29 @@ int fill_pdf_with_fdf(const char *pdf_filename, const char *fdf_filename, FILE *
 // XFA) is removed, producing a non-editable ("flattened") PDF.
 int fill_pdf_with_fdf_ex(const char *pdf_filename, const char *fdf_filename, FILE *out, int flatten);
 
+// Structured outcome of a fill, for programmatic callers (the `fill --json`
+// path). `updated` holds the qualified names of the fields actually written;
+// `not_found` holds the FDF field names that matched no form field.
+typedef struct {
+    char **updated;    int n_updated;
+    char **not_found;  int n_not_found;
+    char **truncated;  int n_truncated;   // text fields cut to their /MaxLen
+} FillResult;
+
+// As fill_pdf_with_fdf_ex, but when `res` is non-NULL it is populated with the
+// matched/unmatched field names (caller frees with fill_result_free).
+int fill_pdf_with_fdf_res(const char *pdf_filename, const char *fdf_filename,
+                          FILE *out, int flatten, FillResult *res);
+void fill_result_free(FillResult *res);
+
+// As fill_pdf_with_fdf_res, but the values source may be an FDF *or* a flat JSON
+// object { "FieldName": "value", "Multi": ["a","b"], "Box": true }; the format
+// is auto-detected from the file's first byte, and `values_filename` may be "-"
+// for stdin. Lets an agent fill from the same JSON shape `fields` produces.
+int fill_pdf_with_values(const char *pdf_filename, const char *values_filename,
+                         FILE *out, int flatten, FillResult *res);
+FdfData *parse_values(const char *path);
+
 // Field-introspection helpers shared with the `fields` command (JSON listing).
 // field_choice_options fills disp[] with a choice field's option display texts
 // (the strings fill's /Opt matching accepts); returns the count, 0 when /Opt is
@@ -57,6 +80,11 @@ int field_choice_options(FILE *f, XRefTable *xref, const char *dict,
                          char disp[][256], int max);
 int field_checkbox_on_state(FILE *f, XRefTable *xref, const char *dict,
                             char *out, size_t cap);
+
+// field_radio_options fills names[] with a radio group's option (on-state)
+// names -- the values fill accepts to select a button. Returns the count.
+int field_radio_options(FILE *f, XRefTable *xref, const char *dict,
+                        char names[][128], int max);
 
 // FDF parsing (exposed for testing).
 FdfData *parse_fdf_file(const char *fdf_filename);

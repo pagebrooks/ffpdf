@@ -61,6 +61,9 @@ const PdfCrypt *pdf_doc_crypt(void);
 // Locate the AcroForm object number via the document catalog (Root).
 int find_acroform_obj(FILE *f, XRefTable *xref, int root_obj);
 
+// Resolve the /Root (catalog) object number from the trailer. 0 if not found.
+int find_root_obj(FILE *f);
+
 // ---- Shared raw-object / dictionary helpers (reused by the fill writer) ----
 
 // Raw dictionary text ("<<...>>") of an object, verbatim. Reads uncompressed

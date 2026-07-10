@@ -65,7 +65,7 @@ Type "# 3. fill the form; --flatten bakes the values in and removes the form"
 Enter
 Enter
 Sleep 500ms
-Type "./ffpdf fill --flatten answers.fdf docs/demo-form.pdf > filled.pdf"
+Type "./ffpdf fill --flatten docs/demo-form.pdf answers.fdf > filled.pdf"
 Enter
 Sleep 3.5s
 

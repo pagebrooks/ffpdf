@@ -47,7 +47,7 @@ Type "  export ADDRESS CITY STATE ZIP"
 Enter
 Type "  envsubst < docs/demo-template.fdf |"
 Enter
-Type '    ./ffpdf fill --flatten -o "out/$ZIP-$CITY.pdf" - docs/demo-form.pdf 2>/dev/null'
+Type '    ./ffpdf fill --flatten -o "out/$ZIP-$CITY.pdf" docs/demo-form.pdf - 2>/dev/null'
 Enter
 Type "done < docs/demo-customers.csv"
 Enter

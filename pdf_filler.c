@@ -561,6 +561,51 @@ int field_checkbox_on_state(FILE *f, XRefTable *xref, const char *dict, char *ou
     return ok;
 }
 
+// Iterate a field's /Kids widget object numbers, calling `visit(kid_obj, ctx)`.
+static void for_each_kid(FILE *f, XRefTable *xref, const char *dict,
+                         void (*visit)(int, void *), void *vctx) {
+    char *kids = field_array_text(f, xref, dict, "/Kids");
+    if (!kids) return;
+    const char *p = kids;
+    if (*p == '[') p++;
+    while (*p && *p != ']') {
+        while (isspace((unsigned char)*p)) p++;
+        if (!isdigit((unsigned char)*p)) { if (*p) p++; continue; }
+        int kid = atoi(p);
+        while (isdigit((unsigned char)*p)) p++;             // obj num
+        while (isspace((unsigned char)*p)) p++;
+        while (isdigit((unsigned char)*p)) p++;             // gen
+        while (isspace((unsigned char)*p)) p++;
+        if (*p == 'R') p++;
+        visit(kid, vctx);
+    }
+    free(kids);
+}
+
+// Collect a radio group's option (on-state) names from its kids' /AP /N. These
+// are the values fill accepts to select a button. Returns the count (<= max),
+// 0 if the field is not a radio group with named kid states.
+struct radio_opts { FILE *f; XRefTable *xref; char (*names)[128]; int n, max; };
+static void radio_opt_visit(int kid, void *vctx) {
+    struct radio_opts *r = vctx;
+    if (r->n >= r->max) return;
+    char *kd = get_object_raw(r->f, r->xref, kid, NULL);
+    if (!kd) return;
+    char on[128];
+    if (field_checkbox_on_state(r->f, r->xref, kd, on, sizeof on)) {
+        int dup = 0;
+        for (int j = 0; j < r->n; j++) if (strcmp(r->names[j], on) == 0) dup = 1;
+        if (!dup) snprintf(r->names[r->n++], 128, "%s", on);
+    }
+    free(kd);
+}
+int field_radio_options(FILE *f, XRefTable *xref, const char *dict,
+                        char names[][128], int max) {
+    struct radio_opts r = { f, xref, names, 0, max };
+    for_each_kid(f, xref, dict, radio_opt_visit, &r);
+    return r.n;
+}
+
 // Resolve the appearance-state name to write for a button field. An off-like
 // value maps to /Off; otherwise the widget's real on-state (so a caller value of
 // "Yes"/"On"/"1" checks the box even when the on-state is named differently),
@@ -710,20 +755,176 @@ static void fdf_add(FdfData *d, const char *name, const char *value) {
 }
 
 
-FdfData *parse_fdf_file(const char *fdf_filename) {
-    FILE *fp = portable_fopen(fdf_filename, "rb");
-    if (!fp) { fprintf(stderr, "ERROR: cannot open FDF file: %s\n", fdf_filename); return NULL; }
-    fseek(fp, 0, SEEK_END);
-    long sz = ftell(fp);
-    fseek(fp, 0, SEEK_SET);
-    char *content = malloc((size_t)sz + 1);
-    if (!content) { fclose(fp); return NULL; }
-    size_t got = fread(content, 1, (size_t)sz, fp);
-    content[got] = '\0';
-    fclose(fp);
+// Read a whole file (or stdin for "-") into a malloc'd, NUL-terminated buffer.
+static char *slurp_file(const char *path, size_t *len_out) {
+    FILE *fp;
+    if (strcmp(path, "-") == 0) fp = stdin;
+    else { fp = portable_fopen(path, "rb"); if (!fp) return NULL; }
+    size_t cap = 65536, n = 0;
+    char *buf = malloc(cap);
+    if (!buf) { if (fp != stdin) fclose(fp); return NULL; }
+    size_t r;
+    while ((r = fread(buf + n, 1, cap - n, fp)) > 0) {
+        n += r;
+        if (n == cap) { cap *= 2; char *g = realloc(buf, cap); if (!g) { free(buf); if (fp != stdin) fclose(fp); return NULL; } buf = g; }
+    }
+    if (fp != stdin) fclose(fp);
+    buf[n] = '\0';
+    if (len_out) *len_out = n;
+    return buf;
+}
 
+static int hex4(const char *p) {
+    int v = 0;
+    for (int i = 0; i < 4; i++) {
+        int c = p[i], d;
+        if (c >= '0' && c <= '9') d = c - '0';
+        else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+        else return -1;
+        v = (v << 4) | d;
+    }
+    return v;
+}
+
+static void utf8_append(char **s, size_t *n, size_t *cap, unsigned long cp) {
+    char tmp[4]; int k = 0;
+    if (cp < 0x80) tmp[k++] = (char)cp;
+    else if (cp < 0x800) { tmp[k++] = (char)(0xC0 | (cp >> 6)); tmp[k++] = (char)(0x80 | (cp & 0x3F)); }
+    else if (cp < 0x10000) { tmp[k++] = (char)(0xE0 | (cp >> 12)); tmp[k++] = (char)(0x80 | ((cp >> 6) & 0x3F)); tmp[k++] = (char)(0x80 | (cp & 0x3F)); }
+    else { tmp[k++] = (char)(0xF0 | (cp >> 18)); tmp[k++] = (char)(0x80 | ((cp >> 12) & 0x3F)); tmp[k++] = (char)(0x80 | ((cp >> 6) & 0x3F)); tmp[k++] = (char)(0x80 | (cp & 0x3F)); }
+    while (*n + (size_t)k + 1 > *cap) { *cap *= 2; char *g = realloc(*s, *cap); if (!g) return; *s = g; }
+    for (int i = 0; i < k; i++) (*s)[(*n)++] = tmp[i];
+}
+
+// Parse a JSON string at `p` ('"'); return the position past the closing quote,
+// with the decoded UTF-8 in *out (malloc'd). NULL on malformed input.
+static const char *json_str(const char *p, char **out) {
+    if (*p != '"') return NULL;
+    p++;
+    size_t cap = 32, n = 0;
+    char *s = malloc(cap);
+    if (!s) return NULL;
+    while (*p && *p != '"') {
+        if (*p == '\\') {
+            p++;
+            char c = 0;
+            switch (*p) {
+                case '"': c = '"'; break;  case '\\': c = '\\'; break; case '/': c = '/'; break;
+                case 'n': c = '\n'; break; case 't': c = '\t'; break;  case 'r': c = '\r'; break;
+                case 'b': c = '\b'; break; case 'f': c = '\f'; break;
+                case 'u': {
+                    int cp = hex4(p + 1);
+                    if (cp < 0) { free(s); return NULL; }
+                    p += 4;
+                    if (cp >= 0xD800 && cp <= 0xDBFF && p[1] == '\\' && p[2] == 'u') {
+                        int lo = hex4(p + 3);
+                        if (lo >= 0xDC00 && lo <= 0xDFFF) { cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00); p += 6; }
+                    }
+                    utf8_append(&s, &n, &cap, (unsigned long)cp);
+                    p++;
+                    continue;
+                }
+                default: free(s); return NULL;   // invalid escape
+            }
+            p++;
+            if (n + 2 > cap) { cap *= 2; char *g = realloc(s, cap); if (!g) { free(s); return NULL; } s = g; }
+            s[n++] = c;
+        } else {
+            if (n + 2 > cap) { cap *= 2; char *g = realloc(s, cap); if (!g) { free(s); return NULL; } s = g; }
+            s[n++] = *p++;
+        }
+    }
+    if (*p != '"') { free(s); return NULL; }
+    s[n] = '\0';
+    *out = s;
+    return p + 1;
+}
+
+static const char *json_ws(const char *p) {
+    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
+    return p;
+}
+
+// Parse a flat JSON object of field values into an FdfData (the same structure
+// parse_fdf_file produces), so `fill` can consume the JSON an agent already got
+// from `fields`. Values may be a string, an array of strings (multi-select), a
+// number (used verbatim), or a boolean (true -> "Yes" to check a box, false ->
+// "Off"); null skips the field. `path` may be "-" for stdin. NULL on error.
+static FdfData *parse_json_mem(const char *content) {
     FdfData *d = calloc(1, sizeof(FdfData));
-    if (!d) { free(content); return NULL; }
+    if (!d) return NULL;
+
+    const char *p = json_ws(content);
+    if (*p != '{') { fprintf(stderr, "ERROR: JSON values must be an object\n"); goto bad; }
+    p = json_ws(p + 1);
+    while (*p && *p != '}') {
+        char *key = NULL;
+        p = json_str(p, &key);
+        if (!p) { fprintf(stderr, "ERROR: malformed JSON key\n"); goto bad; }
+        p = json_ws(p);
+        if (*p != ':') { free(key); fprintf(stderr, "ERROR: expected ':' after key\n"); goto bad; }
+        p = json_ws(p + 1);
+
+        if (*p == '"') {                                   // string value
+            char *val = NULL;
+            p = json_str(p, &val);
+            if (!p) { free(key); fprintf(stderr, "ERROR: malformed JSON string value\n"); goto bad; }
+            fdf_add(d, key, val ? val : "");
+            free(val);
+        } else if (*p == '[') {                            // array of strings (multi-select)
+            char *marr[64]; int mc = 0;
+            p = json_ws(p + 1);
+            while (*p && *p != ']') {
+                if (*p != '"') { for (int j = 0; j < mc; j++) free(marr[j]); free(key); fprintf(stderr, "ERROR: array must hold strings\n"); goto bad; }
+                char *v = NULL;
+                p = json_str(p, &v);
+                if (!p) { for (int j = 0; j < mc; j++) free(marr[j]); free(key); goto bad; }
+                if (mc < 64) marr[mc++] = v; else free(v);
+                p = json_ws(p);
+                if (*p == ',') p = json_ws(p + 1);
+            }
+            if (*p == ']') p++;
+            fdf_add(d, key, mc > 0 ? marr[0] : "");
+            if (mc > 1 && d->field_count > 0) {
+                FdfField *fl = &d->fields[d->field_count - 1];
+                fl->values = malloc((size_t)mc * sizeof(char *));
+                if (fl->values) { for (int j = 0; j < mc; j++) fl->values[j] = marr[j]; fl->nvalues = mc; }
+            } else {
+                for (int j = 0; j < mc; j++) free(marr[j]);
+            }
+        } else if (strncmp(p, "true", 4) == 0) {           // check a box
+            fdf_add(d, key, "Yes"); p += 4;
+        } else if (strncmp(p, "false", 5) == 0) {          // uncheck
+            fdf_add(d, key, "Off"); p += 5;
+        } else if (strncmp(p, "null", 4) == 0) {           // skip
+            p += 4;
+        } else if (*p == '-' || (*p >= '0' && *p <= '9')) {  // number: verbatim text
+            const char *q = p;
+            while (*q == '-' || *q == '+' || *q == '.' || *q == 'e' || *q == 'E' ||
+                   (*q >= '0' && *q <= '9')) q++;
+            char num[64]; size_t nl = (size_t)(q - p);
+            if (nl >= sizeof(num)) nl = sizeof(num) - 1;
+            memcpy(num, p, nl); num[nl] = '\0';
+            fdf_add(d, key, num);
+            p = q;
+        } else {
+            free(key); fprintf(stderr, "ERROR: unsupported JSON value type\n"); goto bad;
+        }
+        free(key);
+        p = json_ws(p);
+        if (*p == ',') p = json_ws(p + 1);
+    }
+    return d;
+
+bad:
+    free_fdf_data(d);
+    return NULL;
+}
+
+static FdfData *parse_fdf_mem(const char *content) {
+    FdfData *d = calloc(1, sizeof(FdfData));
+    if (!d) return NULL;
 
     // Walk field dictionaries: each has /T (name) and optionally /V (value).
     // We scan for "/T" occurrences and read the paired "/V" that follows within
@@ -778,6 +979,29 @@ FdfData *parse_fdf_file(const char *fdf_filename) {
         p = after;
     }
 
+    return d;
+}
+
+FdfData *parse_fdf_file(const char *fdf_filename) {
+    char *content = slurp_file(fdf_filename, NULL);
+    if (!content) { fprintf(stderr, "ERROR: cannot read FDF file: %s\n", fdf_filename); return NULL; }
+    FdfData *d = parse_fdf_mem(content);
+    free(content);
+    return d;
+}
+
+// Read a values source (FDF or JSON, or "-" for stdin) and parse it into an
+// FdfData, auto-detecting the format from the first non-whitespace byte:
+// '{' is JSON, '%' is FDF. NULL on error.
+FdfData *parse_values(const char *path) {
+    char *content = slurp_file(path, NULL);
+    if (!content) { fprintf(stderr, "ERROR: cannot read values file: %s\n", path); return NULL; }
+    const char *p = json_ws(content);
+    FdfData *d = NULL;
+    if (*p == '{')      d = parse_json_mem(content);
+    else if (*p == '%') d = parse_fdf_mem(content);   // %FDF
+    else fprintf(stderr, "ERROR: unrecognized values format "
+                         "(expected an FDF or a JSON object)\n");
     free(content);
     return d;
 }
@@ -985,6 +1209,39 @@ static void emit_field_appearance(FillCtx *c, const char *fodict, int ap_obj,
     fill_record(c, ap_obj, apoff, 0);
 }
 
+// Emit each kid widget of a radio group with /AS set: the kid whose on-state
+// matches `state` gets /AS/<state>, the rest /AS/Off, so the selection renders
+// in viewers that draw a widget from its own /AS (not just the parent /V).
+struct radio_emit { FillCtx *c; const char *state; };
+static void radio_kid_emit(int kid, void *vctx) {
+    struct radio_emit *r = vctx;
+    int gen = 0;
+    char *kd = get_object_raw(r->c->f, r->c->xref, kid, &gen);
+    if (!kd) return;
+    char on[128];
+    int selected = field_checkbox_on_state(r->c->f, r->c->xref, kd, on, sizeof on)
+                   && strcmp(on, r->state) == 0;
+    char *tmp = extract_dict_inner_alloc(kd);
+    if (tmp) {
+        remove_entry(tmp, "/AS");
+        size_t ln = strlen(tmp);
+        while (ln > 0 && isspace((unsigned char)tmp[ln - 1])) tmp[--ln] = '\0';
+        Buf kb = {0};
+        buf_puts(&kb, tmp);
+        buf_printf(&kb, "/AS/%s", selected ? r->state : "Off");
+        long off = r->c->base_len + (long)r->c->o.len;
+        emit_dict_object(&r->c->o, r->c->crypt, kid, gen, (const char *)kb.data);
+        fill_record(r->c, kid, off, gen);
+        free(kb.data);
+        free(tmp);
+    }
+    free(kd);
+}
+static void emit_radio_kids(FillCtx *c, const char *field_dict, const char *state) {
+    struct radio_emit r = { c, state };
+    for_each_kid(c->f, c->xref, field_dict, radio_kid_emit, &r);
+}
+
 // Emit the updated object (and any appearance stream) for FDF field `i`, which
 // maps to `loc`. Skips signature fields and no-ops on unresolved dictionaries.
 static void emit_filled_field(FillCtx *c, FieldMap *map, FdfData *fdf, int i, FieldLoc *loc) {
@@ -1059,6 +1316,9 @@ static void emit_filled_field(FillCtx *c, FieldMap *map, FdfData *fdf, int i, Fi
         emit_dict_object(&c->o, c->crypt, loc->obj_num, loc->gen_num, (const char *)fb.data);
         fill_record(c, loc->obj_num, off, loc->gen_num);
         c->updated_fields++;
+        // Radio group: also set the matching kid widget's /AS so it renders.
+        if (loc->ftype == 'B' && (field_flags(fodict) & 0x8000))
+            emit_radio_kids(c, fodict, btn_state);
         if (log_field_values())
             fprintf(stderr, "Filled '%s' (obj %d) = '%s'%s%s\n", loc->qname, loc->obj_num, value,
                     (loc->ftype == 'C' && choice_idx >= 0) ? " [+/I]" : "",
@@ -1423,10 +1683,77 @@ static void flatten_form(FillCtx *c, int root_obj) {
     fprintf(stderr, "Flattened %d page(s); removed the interactive form\n", npages);
 }
 
-int fill_pdf_with_fdf_ex(const char *pdf_filename, const char *fdf_filename, FILE *out, int flatten) {
-    FdfData *fdf = parse_fdf_file(fdf_filename);
-    if (!fdf) return 1;
-    fprintf(stderr, "Parsed %d field value(s) from FDF\n", fdf->field_count);
+// Append a strdup'd copy of `s` to a growable char* array (FillResult lists).
+static void strv_add(char ***arr, int *n, const char *s) {
+    char **g = realloc(*arr, (size_t)(*n + 1) * sizeof(char *));
+    if (!g) return;
+    *arr = g;
+    (*arr)[*n] = strdup(s);
+    if ((*arr)[*n]) (*n)++;
+}
+
+void fill_result_free(FillResult *r) {
+    if (!r) return;
+    for (int i = 0; i < r->n_updated; i++) free(r->updated[i]);
+    for (int i = 0; i < r->n_not_found; i++) free(r->not_found[i]);
+    for (int i = 0; i < r->n_truncated; i++) free(r->truncated[i]);
+    free(r->updated); free(r->not_found); free(r->truncated);
+    r->updated = r->not_found = r->truncated = NULL;
+    r->n_updated = r->n_not_found = r->n_truncated = 0;
+}
+
+// Byte length of the prefix of `s` holding at most `n` UTF-8 characters
+// (never splitting a multibyte sequence).
+static size_t utf8_prefix_bytes(const char *s, int n) {
+    size_t i = 0, len = strlen(s);
+    int chars = 0;
+    while (i < len && chars < n) {
+        unsigned char c = s[i];
+        size_t step = (c < 0x80) ? 1 : (c < 0xE0) ? 2 : (c < 0xF0) ? 3 : 4;
+        if (i + step > len) step = len - i;   // clamp a malformed trailing seq
+        i += step;
+        chars++;
+    }
+    return i;
+}
+static int utf8_len(const char *s) {
+    size_t i = 0, len = strlen(s);
+    int n = 0;
+    while (i < len) {
+        unsigned char c = s[i];
+        size_t step = (c < 0x80) ? 1 : (c < 0xE0) ? 2 : (c < 0xF0) ? 3 : 4;
+        if (i + step > len) step = len - i;
+        i += step;
+        n++;
+    }
+    return n;
+}
+
+// If `loc` is a text field with a /MaxLen shorter than its value, truncate the
+// value in place (it is heap-owned), warn, and record it in the result. This
+// keeps the written /V conformant, matching what a viewer would enforce.
+static void enforce_maxlen(FILE *f, XRefTable *xref, FdfData *fdf, int i,
+                           FieldLoc *loc, FillResult *res) {
+    if (loc->ftype != 'T') return;
+    char *fdict = get_object_raw(f, xref, loc->obj_num, NULL);
+    if (!fdict) return;
+    const char *ml = find_key(fdict, "/MaxLen");
+    if (ml && isdigit((unsigned char)*ml)) {
+        int maxlen = atoi(ml);
+        char *v = fdf->fields[i].field_value;
+        if (maxlen > 0 && v && utf8_len(v) > maxlen) {
+            size_t cut = utf8_prefix_bytes(v, maxlen);
+            v[cut] = '\0';
+            fprintf(stderr, "WARNING: value for '%s' exceeds MaxLen %d; truncated\n",
+                    loc->qname, maxlen);
+            if (res) strv_add(&res->truncated, &res->n_truncated, loc->qname);
+        }
+    }
+    free(fdict);
+}
+
+static int fill_core(const char *pdf_filename, FdfData *fdf,
+                     FILE *out, int flatten, FillResult *res) {
 
     // All resources released together at `cleanup` (rc carries the exit code);
     // xref/map/ctx are safe to free in their zero-initialized state, so every
@@ -1508,6 +1835,7 @@ int fill_pdf_with_fdf_ex(const char *pdf_filename, const char *fdf_filename, FIL
         FieldLoc *loc = match_field(&map, fdf->fields[i].field_name);
         if (!loc) {
             fprintf(stderr, "WARNING: field not found in PDF: '%s'\n", fdf->fields[i].field_name);
+            if (res) strv_add(&res->not_found, &res->n_not_found, fdf->fields[i].field_name);
             continue;
         }
         int superseded = 0;
@@ -1516,7 +1844,9 @@ int fill_pdf_with_fdf_ex(const char *pdf_filename, const char *fdf_filename, FIL
             if (l2 && l2->obj_num == loc->obj_num) superseded = 1;
         }
         if (superseded) continue;
+        enforce_maxlen(f, &xref, fdf, i, loc, res);
         emit_filled_field(&ctx, &map, fdf, i, loc);
+        if (res) strv_add(&res->updated, &res->n_updated, loc->qname);
     }
 
     if (ctx.flatten) {
@@ -1526,8 +1856,17 @@ int fill_pdf_with_fdf_ex(const char *pdf_filename, const char *fdf_filename, FIL
         sync_xfa_datasets(&ctx, fdf, &map, acroform);
     }
 
+    // Nothing in the input matched a form field: a no-op fill is a failure, not
+    // a silent success. Exit 2 (distinct from 1 = bad input). Flatten is exempt
+    // -- flattening removes the form even when no new values are supplied.
+    if (!ctx.flatten && ctx.updated_fields == 0) {
+        fprintf(stderr, "ERROR: no field in the input matched the form; "
+                        "nothing to fill\n");
+        rc = 2;
+        goto cleanup;
+    }
     if (ctx.nentries == 0) {
-        fprintf(stderr, "ERROR: no fields were updated; not writing output\n");
+        fprintf(stderr, "ERROR: no changes to write\n");
         goto cleanup;
     }
 
@@ -1570,8 +1909,31 @@ cleanup:
     objstm_cache_reset();
     xref_free(&xref);
     if (f) fclose(f);
+    return rc;
+}
+
+int fill_pdf_with_fdf_res(const char *pdf_filename, const char *fdf_filename,
+                          FILE *out, int flatten, FillResult *res) {
+    FdfData *fdf = parse_fdf_file(fdf_filename);
+    if (!fdf) return 1;
+    fprintf(stderr, "Parsed %d field value(s) from FDF\n", fdf->field_count);
+    int rc = fill_core(pdf_filename, fdf, out, flatten, res);
     free_fdf_data(fdf);
     return rc;
+}
+
+int fill_pdf_with_values(const char *pdf_filename, const char *values_filename,
+                         FILE *out, int flatten, FillResult *res) {
+    FdfData *fdf = parse_values(values_filename);
+    if (!fdf) return 1;
+    fprintf(stderr, "Parsed %d field value(s)\n", fdf->field_count);
+    int rc = fill_core(pdf_filename, fdf, out, flatten, res);
+    free_fdf_data(fdf);
+    return rc;
+}
+
+int fill_pdf_with_fdf_ex(const char *pdf_filename, const char *fdf_filename, FILE *out, int flatten) {
+    return fill_pdf_with_fdf_res(pdf_filename, fdf_filename, out, flatten, NULL);
 }
 
 int fill_pdf_with_fdf(const char *pdf_filename, const char *fdf_filename, FILE *out) {

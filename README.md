@@ -11,7 +11,7 @@
 It’s built to handle real-world PDFs: government forms, bank documents, LiveCycle/XFA forms, and encrypted “secured” PDFs, not just clean textbook files.
 
 ```console
-$ ./ffpdf fill answers.fdf form.pdf > filled.pdf
+$ ./ffpdf fill form.pdf answers.fdf > filled.pdf
 ```
 
 ---
@@ -37,7 +37,7 @@ make
 ./ffpdf fdf-extract form.pdf
 
 # 3. Fill it
-./ffpdf fill answers.fdf form.pdf > filled.pdf
+./ffpdf fill form.pdf answers.fdf > filled.pdf
 ```
 
 That’s the whole loop: **discover → edit → fill.**
@@ -88,7 +88,7 @@ trailer
 **3. Fill:**
 
 ```console
-$ ./ffpdf fill answers.fdf form.pdf > filled.pdf
+$ ./ffpdf fill form.pdf answers.fdf > filled.pdf
 ```
 
 Open `filled.pdf`: the name is typed in and the box is checked. The tool figures out the right on‑state for the checkbox, generates the visual appearance so the values show in *any* viewer, and (for dynamic XFA forms) also updates the XFA data packet so Adobe renders it too.
@@ -117,8 +117,8 @@ The `docs/` folder carries the actual files, which you can open right in your br
 | [`example-flattened.pdf`](docs/example-flattened.pdf) | The `--flatten` result: the same values baked into the page content, with the form removed (nothing left to edit) |
 
 ```console
-$ ffpdf fill -o example-filled.pdf example-answers.fdf example-form.pdf
-$ ffpdf fill --flatten -o example-flattened.pdf example-answers.fdf example-form.pdf
+$ ffpdf fill -o example-filled.pdf example-form.pdf example-answers.fdf
+$ ffpdf fill --flatten -o example-flattened.pdf example-form.pdf example-answers.fdf
 ```
 
 The PDFs in the repo were produced by ffpdf itself (`make examples` regenerates all of them), and the values are visible in any viewer because fill generates the visual appearance streams rather than relying on the viewer to draw them.
@@ -153,7 +153,7 @@ then loop over your data; `envsubst` (from gettext) does the substitution:
 ```bash
 while IFS=, read -r ADDRESS CITY STATE ZIP; do
   export ADDRESS CITY STATE ZIP
-  envsubst < template.fdf | ffpdf fill -o "out/$ZIP-$CITY.pdf" - form.pdf
+  envsubst < template.fdf | ffpdf fill -o "out/$ZIP-$CITY.pdf" form.pdf -
 done < customers.csv
 ```
 
@@ -164,6 +164,7 @@ Measured on a single ordinary core: **1,000 filled PDFs in about a second** for 
 Two practical notes:
 
 - **Escape your data.** `(`, `)` and `\` inside a value must be backslash-escaped in FDF strings, e.g. `/V (Smith \(Jr\))`.
+- **Multi-select fields take an array.** A list box that accepts several values is filled with `/V [(opt1) (opt2)]` (the `fields` output flags these with `"multi_select": true` and lists the valid `options`).
 - **Parallelize trivially.** Every fill is an independent process with no shared state: split the input and run N loops, or hand the whole thing to `xargs -P`/GNU `parallel`.
 
 ---
@@ -174,15 +175,37 @@ Two practical notes:
 |---|---|
 | `fdf-extract  <pdf>` | Extract all form fields as an **FDF** (to stdout) |
 | `xfdf-extract <pdf>` | Extract all form fields as an **XFDF** (XML flavour, to stdout) |
-| `fields <pdf>` | List all form fields as **JSON**: names, types, current values, a choice field's options and flags, a checkbox's on-state. The machine-readable companion to `fdf-extract`, built for scripts and AI agents |
-| `fill [-f\|--flatten] [-o FILE] <fdf> <pdf>` | Fill `<pdf>` with the values in `<fdf>` (`-` reads the FDF from stdin), write the result to stdout or, with **`-o`**, atomically to `FILE`. With **`--flatten`** (**`-f`**), bake the values into the page and remove the interactive form, producing a non‑editable PDF |
+| `fields <pdf>` | List all form fields as **JSON**: names, human-readable labels, types, current values, page numbers, `required`/`readonly`/`maxlen` constraints, a choice field's options and flags, a checkbox's on-state, plus document `xfa`/`dynamic_xfa` flags. The machine-readable companion to `fdf-extract`, built for scripts and AI agents |
+| `fill [-f\|--flatten] [-o FILE] <pdf> <values>` | Fill `<pdf>` from a **`<values>`** file — an **FDF or a JSON object**, auto-detected; the PDF and values may be in either order, and `<values>` may be `-` for stdin. Write the result to stdout or, with **`-o`**, atomically to `FILE`. With **`--flatten`** (**`-f`**), bake the values into the page and remove the interactive form, producing a non‑editable PDF |
 | `xref <pdf>` | Dump the parsed cross-reference table as JSON (a debugging aid) |
 | `help` (`-h`, `--help`) | Print full help to stdout and exit |
 | `version` (`-v`, `--version`) | Print version and license info and exit |
 
-All commands are subcommands of `ffpdf` (e.g. `ffpdf fill data.fdf form.pdf`).
+All commands are subcommands of `ffpdf` (e.g. `ffpdf fill form.pdf data.fdf`).
 
 Everything goes to **stdout**, so redirect it (`... > out.pdf`), or use `-o out.pdf`, which writes **atomically** (the file is assembled as `out.pdf.tmp` and renamed into place only on success, so a failed fill never leaves a partial output). As a safety net, `fill` refuses to write PDF bytes to a terminal. Progress and warnings go to stderr, so they won’t corrupt the output. `--` ends option parsing for file names that begin with `-`. Run `ffpdf --help` for a built-in summary, or see the `ffpdf(1)` man page.
+
+**Checking the result programmatically.** By default `fill` already fails loudly when nothing lands: if **no** field in the input matched the form, it writes no output and exits `2` (a no-op fill is treated as a failure, not a silent success — `--flatten` is exempt). For more detail, `fill --json` writes a JSON summary to stdout (which fields were `updated`, `not_found`, or `truncated` to fit a `/MaxLen`, plus counts; pass `-o` for the PDF since stdout then carries the JSON), and `fill --strict` exits `3` if *any* field didn't match — so a caller can trust the exit code instead of parsing text:
+
+```console
+$ ffpdf fill --json --strict -o out.pdf form.pdf answers.fdf
+{ "updated": ["applicant_name"], "not_found": ["agree_typo"],
+  "updated_count": 1, "not_found_count": 1 }
+$ echo $?
+3
+```
+
+Exit codes: **0** success · **1** bad usage or unreadable PDF · **2** nothing matched (no output) · **3** `--strict` and some field didn't match.
+
+**Filling from JSON (no FDF).** The `<values>` file can be a JSON object in the same shape `fields` emits — `{ "FieldName": "value", "Multi": ["a", "b"], "Box": true }` — auto-detected, so an agent can close the discover-then-fill loop in one format without ever authoring FDF:
+
+```console
+$ ffpdf fields form.pdf > fields.json     # discover
+$ # ... produce values.json from fields.json ...
+$ ffpdf fill --json --strict -o out.pdf form.pdf values.json   # fill + verify
+```
+
+A string fills a text or choice field, an array fills a multi-select, a number is used verbatim, and a boolean checks (`true`) or clears (`false`) a checkbox. (`values.json` may be `-` to read from stdin.) A value longer than a text field's `/MaxLen` is truncated to fit, with a warning (and is listed under `truncated` in the `--json` result).
 
 ---
 
@@ -197,7 +220,7 @@ Everything goes to **stdout**, so redirect it (`... > out.pdf`), or use `-o out.
 | Type | Filling behaviour |
 |---|---|
 | Text | Value written; visual appearance generated (UTF‑16 for non‑ASCII) |
-| Checkbox / radio | Maps `Yes`/`On`/`1` (or an explicit state) to the widget’s real on‑state |
+| Checkbox / radio | Maps `Yes`/`On`/`1` (or an explicit state) to the widget’s real on‑state; a radio group's valid option names are listed by `fields`, and fill sets both the group value and the selected button |
 | Choice (combo / list box) | Matches your value against the options, sets the selection index, and draws it, single **or** multi‑select |
 | Signature | Left untouched (a signature isn’t a fillable value) |
 

@@ -493,7 +493,7 @@ int find_acroform_obj(FILE *f, XRefTable *xref, int root_obj) {
 }
 
 // Resolve the /Root (catalog) object number from the trailer / xref-stream dict.
-static int find_root_obj(FILE *f) {
+int find_root_obj(FILE *f) {
     long sx = find_startxref(f);
     if (sx < 0) return 0;
     fseek(f, 0, SEEK_END);

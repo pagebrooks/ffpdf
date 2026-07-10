@@ -66,16 +66,25 @@ PROG_NAME " " PROG_VERSION " \xe2\x80\x94 read and fill PDF form fields.\n"
 "COMMANDS\n"
 "  fdf-extract  <pdf>              Extract form fields as an FDF\n"
 "  xfdf-extract <pdf>              Extract form fields as an XFDF\n"
-"  fields       <pdf>              List form fields as JSON: names, types,\n"
-"                                  current values, choice options, checkbox\n"
-"                                  on-states. Made for scripts and AI agents\n"
-"  fill [options] <fdf> <pdf>      Fill <pdf> with values from <fdf>\n"
+"  fields       <pdf>              List form fields as JSON: names, labels,\n"
+"                                  types, values, page, required/readonly/\n"
+"                                  maxlen, choice options, checkbox on-states,\n"
+"                                  plus document xfa/dynamic_xfa flags. Made\n"
+"                                  for scripts and AI agents\n"
+"  fill [options] <pdf> <values>   Fill <pdf> from a <values> file, which may\n"
+"                                  be an FDF or a JSON object (auto-detected);\n"
+"                                  the PDF and values may be in either order,\n"
+"                                  and <values> may be '-' for stdin.\n"
 "                                  -f, --flatten bake the values in and remove\n"
 "                                                the form -> a non-editable PDF\n"
 "                                  -o, --output FILE   write to FILE instead of\n"
 "                                                stdout (atomically: FILE.tmp is\n"
 "                                                renamed over FILE on success)\n"
-"                                  <fdf> may be '-' to read the FDF from stdin\n"
+"                                  --json        write a JSON result (updated /\n"
+"                                                not_found fields) to stdout;\n"
+"                                                requires -o for the PDF\n"
+"                                  --strict      exit 3 if any value did not\n"
+"                                                match a form field\n"
 "  xref         <pdf>              Dump the parsed cross-reference table (debug)\n"
 "  help                        Show this help and exit  (also -h, --help)\n"
 "  version                     Show version information  (also -v, --version)\n"
@@ -83,7 +92,7 @@ PROG_NAME " " PROG_VERSION " \xe2\x80\x94 read and fill PDF form fields.\n"
 "WORKFLOW\n"
 "  1. Discover field names:  " PROG_NAME " fdf-extract form.pdf\n"
 "  2. Edit the FDF, setting each field's /V (value) beside its /T (name).\n"
-"  3. Fill it:               " PROG_NAME " fill answers.fdf form.pdf > filled.pdf\n"
+"  3. Fill it:               " PROG_NAME " fill form.pdf answers.fdf > filled.pdf\n"
 "\n"
 "  Bulk fills / mail merge:  an FDF is plain text, so template it and loop --\n"
 "  substitute per-record values (e.g. ${NAME} + envsubst) and run fill once\n"
@@ -95,6 +104,10 @@ PROG_NAME " " PROG_VERSION " \xe2\x80\x94 read and fill PDF form fields.\n"
 "    Progress and warnings go to stderr, so they never corrupt the output.\n"
 "  * '--' ends option parsing (for file names that begin with '-').\n"
 "  * fill takes the FDF first, then the PDF:  fill <fdf> <pdf>.\n"
+"  * A JSON values file maps field name -> value (string), array (multi-\n"
+"    select), number, or boolean (true/false to check/clear a box).\n""  * A value longer than a text field's /MaxLen is truncated to fit (with a\n"
+"    warning; --json lists it under \"truncated\").\n"
+"  * A multi-select choice field in FDF takes an array:  /V [(opt1) (opt2)].\n"
 "  * Fills are incremental updates: the original bytes are preserved and the\n"
 "    changes appended. --flatten instead bakes the values in and removes the form.\n"
 "  * Encrypted PDFs are supported for the empty user password (RC4/AES).\n"
@@ -110,6 +123,8 @@ PROG_NAME " " PROG_VERSION " \xe2\x80\x94 read and fill PDF form fields.\n"
 "EXIT STATUS\n"
 "  0  success\n"
 "  1  error: bad usage, or an unreadable / unparseable PDF\n"
+"  2  fill: no field in the input matched the form (nothing filled; no output)\n"
+"  3  fill --strict: some (but not all) fields did not match a form field\n"
 "\n"
 "See ffpdf(1) or README.md for details.\n",
     stdout);
@@ -175,14 +190,35 @@ static int cmd_extract(int mode, const char *path) {
 // Run `fill`: resolve the stdin-FDF and -o conventions, then delegate to
 // fill_pdf_with_fdf_ex. With -o the PDF is written to <FILE>.tmp and renamed
 // into place only on success, so a failed fill never leaves a partial output.
-static int cmd_fill(const char *prog, const char *fdf_arg, const char *pdf_arg,
-                    const char *outpath, int flatten) {
+// Peek a file's first bytes: is it a PDF (starts with "%PDF" after optional
+// whitespace)? Returns 1 (PDF), 0 (not), -1 (cannot open). Used to tell the
+// PDF and the values file apart regardless of argument order.
+static int file_is_pdf(const char *path) {
+    FILE *f = portable_fopen(path, "rb");
+    if (!f) return -1;
+    char buf[16];
+    size_t n = fread(buf, 1, sizeof buf, f);
+    fclose(f);
+    size_t i = 0;
+    while (i < n && (buf[i] == ' ' || buf[i] == '\t' || buf[i] == '\n' || buf[i] == '\r')) i++;
+    return (n - i >= 4 && memcmp(buf + i, "%PDF", 4) == 0) ? 1 : 0;
+}
+
+// Run `fill`: `values_arg` is an FDF or JSON file (or "-" for stdin), auto-
+// detected; with -o the PDF is written to <FILE>.tmp and renamed on success.
+static int cmd_fill(const char *prog, const char *pdf_arg, const char *values_arg,
+                    const char *outpath, int flatten, int json, int strict) {
+    // --json writes the machine-readable result to stdout, so the PDF must go
+    // to a file (-o); the two structured outputs cannot share stdout.
+    if (json && !outpath) {
+        fprintf(stderr, "%s: --json requires -o FILE (stdout carries the JSON result)\n", prog);
+        return 1;
+    }
     int explicit_stdout = 0;
     if (outpath && strcmp(outpath, "-") == 0) {   // -o - : stdout, explicitly
         outpath = NULL;
         explicit_stdout = 1;
     }
-
     if (!outpath && !explicit_stdout && portable_isatty_stdout()) {
         fprintf(stderr,
                 "%s: refusing to write a PDF to a terminal.\n"
@@ -191,66 +227,57 @@ static int cmd_fill(const char *prog, const char *fdf_arg, const char *pdf_arg,
         return 1;
     }
 
-    // FDF from stdin ("-"): spool to a temp file so the parser has a path.
-    char fdf_tmp[4096];
-    int fdf_is_tmp = 0;
-    if (strcmp(fdf_arg, "-") == 0) {
-        FILE *tf = os_temp_file(fdf_tmp, sizeof fdf_tmp);
-        if (!tf) {
-            fprintf(stderr, "%s: cannot create a temp file for the stdin FDF\n", prog);
-            return 1;
-        }
-        char buf[65536];
-        size_t r;
-        while ((r = fread(buf, 1, sizeof buf, stdin)) > 0) {
-            if (fwrite(buf, 1, r, tf) != r) {
-                fprintf(stderr, "%s: cannot spool stdin FDF: write failed\n", prog);
-                fclose(tf);
-                portable_remove(fdf_tmp);
-                return 1;
-            }
-        }
-        fclose(tf);
-        fdf_arg = fdf_tmp;
-        fdf_is_tmp = 1;
-    }
-
     FILE *out = stdout;
     char out_tmp[4096];
     if (outpath) {
         int n = snprintf(out_tmp, sizeof out_tmp, "%s.tmp", outpath);
         if (n < 0 || (size_t)n >= sizeof out_tmp) {
             fprintf(stderr, "%s: output path too long\n", prog);
-            if (fdf_is_tmp) portable_remove(fdf_tmp);
             return 1;
         }
         out = portable_fopen(out_tmp, "wb");
         if (!out) {
             fprintf(stderr, "%s: cannot open %s for writing\n", prog, out_tmp);
-            if (fdf_is_tmp) portable_remove(fdf_tmp);
             return 1;
         }
     }
 
-    int rc = fill_pdf_with_fdf_ex(pdf_arg, fdf_arg, out, flatten);
+    FillResult res = {0};
+    FillResult *resptr = (json || strict) ? &res : NULL;
+    int rc = fill_pdf_with_values(pdf_arg, values_arg, out, flatten, resptr);
 
     if (outpath) {
         if (fclose(out) != 0 && rc == 0) {
             fprintf(stderr, "%s: write to %s failed\n", prog, out_tmp);
             rc = 1;
         }
-        if (rc == 0) {
-            if (portable_rename(out_tmp, outpath) != 0) {
-                fprintf(stderr, "%s: cannot rename %s to %s\n", prog, out_tmp, outpath);
-                rc = 1;
-            }
+        if (rc == 0 && portable_rename(out_tmp, outpath) != 0) {
+            fprintf(stderr, "%s: cannot rename %s to %s\n", prog, out_tmp, outpath);
+            rc = 1;
         }
         if (rc != 0) portable_remove(out_tmp);   // never leave a partial output
     }
-    if (fdf_is_tmp) portable_remove(fdf_tmp);
+
+    // --json result to stdout whenever the fill ran (rc 0 = ok, 2 = no match).
+    if (json && (rc == 0 || rc == 2)) {
+        printf("{\n  \"updated\": [");
+        for (int i = 0; i < res.n_updated; i++)
+            printf("%s\n    \"%s\"", i ? "," : "", res.updated[i]);
+        printf("%s  ],\n  \"not_found\": [", res.n_updated ? "\n" : "");
+        for (int i = 0; i < res.n_not_found; i++)
+            printf("%s\n    \"%s\"", i ? "," : "", res.not_found[i]);
+        printf("%s  ],\n  \"truncated\": [", res.n_not_found ? "\n" : "");
+        for (int i = 0; i < res.n_truncated; i++)
+            printf("%s\n    \"%s\"", i ? "," : "", res.truncated[i]);
+        printf("%s  ],\n  \"updated_count\": %d,\n  \"not_found_count\": %d\n}\n",
+               res.n_truncated ? "\n" : "", res.n_updated, res.n_not_found);
+    }
+    // --strict: a clean write with any unmatched field is a soft failure (3).
+    if (strict && rc == 0 && res.n_not_found > 0) rc = 3;
+
+    fill_result_free(&res);
     return rc;
 }
-
 int main(int argc, char *argv[]) {
 #ifdef _WIN32
     // On Windows stdout defaults to text mode, which rewrites '\n' as "\r\n" and
@@ -281,7 +308,7 @@ int main(int argc, char *argv[]) {
 
     // fill [--flatten] [-o FILE] [--] <fdf> <pdf>  -> PDF on stdout (or FILE)
     if (strcmp(cmd, "fill") == 0) {
-        int flatten = 0, a = 2;
+        int flatten = 0, json = 0, strict = 0, a = 2;
         const char *outpath = NULL;
         for (; a < argc; a++) {
             if (strcmp(argv[a], "--") == 0) { a++; break; }   // end of options
@@ -289,6 +316,8 @@ int main(int argc, char *argv[]) {
                 flatten = 1;
                 continue;
             }
+            if (strcmp(argv[a], "--json") == 0) { json = 1; continue; }
+            if (strcmp(argv[a], "--strict") == 0) { strict = 1; continue; }
             if (strcmp(argv[a], "-o") == 0 || strcmp(argv[a], "--output") == 0) {
                 if (a + 1 >= argc) {
                     fprintf(stderr, "%s: %s requires a file name\n", prog, argv[a]);
@@ -306,7 +335,26 @@ int main(int argc, char *argv[]) {
             break;                                           // first positional
         }
         if (argc - a != 2) { print_usage(stderr, prog); return 1; }
-        return cmd_fill(prog, argv[a], argv[a + 1], outpath, flatten);
+        // Two positionals: a PDF and a values file (FDF or JSON), in either
+        // order. "-" is always the values (stdin); otherwise the "%PDF" file is
+        // the PDF and the other is the values.
+        const char *arg1 = argv[a], *arg2 = argv[a + 1];
+        const char *pdf = NULL, *values = NULL;
+        if (strcmp(arg1, "-") == 0) { values = arg1; pdf = arg2; }
+        else if (strcmp(arg2, "-") == 0) { values = arg2; pdf = arg1; }
+        else {
+            int p1 = file_is_pdf(arg1), p2 = file_is_pdf(arg2);
+            if (p1 < 0) { fprintf(stderr, "%s: cannot open '%s'\n", prog, arg1); return 1; }
+            if (p2 < 0) { fprintf(stderr, "%s: cannot open '%s'\n", prog, arg2); return 1; }
+            if (p1 && !p2) { pdf = arg1; values = arg2; }
+            else if (p2 && !p1) { pdf = arg2; values = arg1; }
+            else {
+                fprintf(stderr, "%s: give one PDF and one values file (FDF or JSON); "
+                                "could not tell them apart\n", prog);
+                return 1;
+            }
+        }
+        return cmd_fill(prog, pdf, values, outpath, flatten, json, strict);
     }
 
     // single-PDF commands

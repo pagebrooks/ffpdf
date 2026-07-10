@@ -9,10 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `fields` command: list every fillable field as JSON, with names, types,
-  current values (UTF-16 values decoded to UTF-8), choice options and
+- `fields` command: list every fillable field as JSON, with names,
+  human-readable labels (`/TU`), types, current values (UTF-16 values decoded
+  to UTF-8), `required`/`readonly`/`maxlen` constraints, choice options and
   combo/multi-select flags, and checkbox on-state names. A machine-readable
   companion to `fdf-extract` for scripts and AI agents.
+
+- `fill --json` writes a machine-readable result to stdout (the `updated`
+  and `not_found` field names and their counts; requires `-o` for the PDF),
+  and `fill --strict` exits 3 if any FDF field did not match a form field.
+  For scripts and AI agents that need to verify a fill by exit code or
+  parsed output rather than scraping stderr.
+- Documented that multi-select choice fields are filled with an array,
+  `/V [(opt1) (opt2)]`.
+- `fill` now accepts a **JSON** values object as well as an FDF, auto-detected
+  from the file's content, and takes the PDF and values file in **either
+  order** (`-` reads the values from stdin). JSON values may be a string, a
+  multi-select array, a number, or a boolean (to check/clear a checkbox). This
+  closes the discover-then-fill loop in one format for agents. The documented
+  argument order is now `fill <pdf> <values>`.
+- Radio-button groups: `fields` now reports the group's valid option names,
+  and `fill` sets the selected button's appearance state (`/AS`) so the choice
+  renders, not just the group value.
+
+### Changed
+
+- `fill` now exits **2** (and writes no output) when no field in the input
+  matched the form. A no-op fill — e.g. every field name misspelled — is
+  treated as a failure by default rather than a silent success, so callers
+  need no flag to detect it. `--flatten` is exempt (it removes the form even
+  with no new values), and a partial match (some fields land) still exits 0
+  unless `--strict` is given.
+
+- A value longer than a text field's `/MaxLen` is now truncated to fit (on a
+  UTF-8 character boundary) with a warning, instead of writing an over-length,
+  non-conformant value; `fill --json` lists such fields under `truncated`.
 
 ### Fixed
 
