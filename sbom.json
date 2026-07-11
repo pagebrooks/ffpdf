@@ -5,7 +5,7 @@
     "component": {
       "type": "application",
       "name": "ffpdf",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "description": "Fast PDF form-field extractor and filler.",
       "licenses": [{ "license": { "id": "Apache-2.0" } }]
     }
