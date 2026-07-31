@@ -28,6 +28,30 @@ Most "fill a PDF form" tools drag in a huge runtime or require commercial licens
 
 ---
 
+## Install
+
+**Homebrew** (macOS and Linux):
+
+```console
+brew install pagebrooks/tap/ffpdf
+```
+
+**Install script** (macOS and Linux), the quickest way to a released binary without Homebrew:
+
+```console
+curl -fsSL https://raw.githubusercontent.com/pagebrooks/ffpdf/main/install.sh | sh
+```
+
+This downloads the archive for your OS and CPU (macOS is a universal binary for both Apple Silicon and Intel), verifies it against the release's `checksums.txt`, and installs `ffpdf` into `~/.local/bin` (no root needed). Set `FFPDF_INSTALL_DIR` or `FFPDF_VERSION` to override the location or pin a version.
+
+Prefer to look before you run? Download `install.sh` and read it first, or grab a prebuilt archive straight from the [releases page](https://github.com/pagebrooks/ffpdf/releases) and verify it yourself:
+
+```console
+sha256sum -c checksums.txt      # or: shasum -a 256 -c checksums.txt
+```
+
+Building from source is a one-liner too; see [Building & testing](#building--testing) below.
+
 ## Quick start
 
 ```console
