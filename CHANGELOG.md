@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-07-31
+
+### Added
+
+- Homebrew install: `brew install pagebrooks/tap/ffpdf`. The formula builds from
+  the release source tarball, so one formula covers Intel and Apple Silicon
+  macOS as well as Homebrew-on-Linux. The canonical copy lives in
+  `packaging/homebrew/`.
+- `install.sh`: a POSIX shell installer that downloads the archive for the
+  detected OS and CPU, verifies it against the release's `checksums.txt`, and
+  installs into `~/.local/bin` without root. `FFPDF_INSTALL_DIR` and
+  `FFPDF_VERSION` override the destination and the release.
+- `checksums.txt`: a single combined SHA-256 manifest covering every release
+  asset, alongside the existing per-file `.sha256` sidecars, so a download can
+  be verified with one `sha256sum -c`.
+- `ARCHFLAGS` in the Makefile, appended to both the compile and link steps, for
+  building multi-architecture binaries.
+
+### Changed
+
+- The macOS release artifact is now a universal2 binary (arm64 + x86_64) and is
+  named `ffpdf-macos-universal2.tar.gz` (previously `ffpdf-macos.tar.gz`).
+
 ## [0.1.1] - 2026-07-10
 
 ### Added
