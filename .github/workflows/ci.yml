@@ -60,7 +60,9 @@ jobs:
         run: |
           make check CC=clang WERROR=1 ARCHFLAGS="-arch arm64 -arch x86_64"
           lipo -info ffpdf
-          lipo -verify-arch ffpdf arm64 x86_64
+          # -verify_arch takes every following argument as an arch type, so the
+          # file has to come first; it exits non-zero if a slice is missing.
+          lipo ffpdf -verify_arch arm64 x86_64
           make sbom CC=clang SBOM_OUT="sbom-${{ matrix.name }}.json"
           mkdir pkg && cp ffpdf LICENSE NOTICE README.md ffpdf.1 pkg/
           tar -czf "${{ matrix.artifact }}" -C pkg .
