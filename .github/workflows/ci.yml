@@ -25,7 +25,7 @@ jobs:
             artifact: ffpdf-linux-x86_64.tar.gz
           - name: macos
             os: macos-latest
-            artifact: ffpdf-macos.tar.gz
+            artifact: ffpdf-macos-universal2.tar.gz
           - name: windows
             os: windows-latest
             artifact: ffpdf-windows-x86_64.zip
@@ -54,8 +54,15 @@ jobs:
         run: pip3 install --quiet --break-system-packages pikepdf
       - name: Build & test (macOS)
         if: matrix.name == 'macos'
+        # Build a universal2 binary (arm64 + x86_64) so one artifact runs
+        # natively on both Apple Silicon and Intel Macs. The test suite exercises
+        # the runner's native slice; `lipo` confirms both slices are present.
         run: |
-          make check CC=clang WERROR=1
+          make check CC=clang WERROR=1 ARCHFLAGS="-arch arm64 -arch x86_64"
+          lipo -info ffpdf
+          # -verify_arch takes every following argument as an arch type, so the
+          # file has to come first; it exits non-zero if a slice is missing.
+          lipo ffpdf -verify_arch arm64 x86_64
           make sbom CC=clang SBOM_OUT="sbom-${{ matrix.name }}.json"
           mkdir pkg && cp ffpdf LICENSE NOTICE README.md ffpdf.1 pkg/
           tar -czf "${{ matrix.artifact }}" -C pkg .
@@ -140,6 +147,28 @@ jobs:
             ${{ matrix.artifact }}.sha256
             sbom-${{ matrix.name }}.json
 
+  release-checksums:
+    name: aggregate checksums.txt (on tag)
+    # The matrix attaches each platform's own .sha256 sidecar; this job adds a
+    # single combined manifest covering the whole release once all builds exist.
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Generate combined checksums.txt
+        run: |
+          cd dist
+          sha256sum ffpdf-*.tar.gz ffpdf-*.zip sbom-*.json > ../checksums.txt
+          cat ../checksums.txt
+      - name: Attach checksums.txt to release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: checksums.txt
+
   latest-release:
     name: publish rolling "latest" prerelease
     # Every green push to main refreshes a single prerelease tagged `latest`.
@@ -153,6 +182,14 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - name: Generate combined checksums.txt
+        # One sha256sum-format manifest covering every downloadable asset, so an
+        # installer can fetch a single file and `sha256sum -c` the whole set.
+        # Alongside the existing per-file .sha256 sidecars, not replacing them.
+        run: |
+          cd dist
+          sha256sum ffpdf-*.tar.gz ffpdf-*.zip sbom-*.json > checksums.txt
+          cat checksums.txt
       - name: Recreate the `latest` release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -173,7 +210,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       # -S warning: gate on real problems; style/info notes don't fail the build
-      - run: shellcheck -S warning test_e2e.sh fuzz.sh
+      - run: shellcheck -S warning test_e2e.sh fuzz.sh install.sh
 
   reproducible:
     name: reproducible build

@@ -51,6 +51,16 @@ ifeq ($(HARDEN),1)
   endif
 endif
 
+# ARCHFLAGS targets multiple CPU architectures in a single binary. Used by CI to
+# ship a macOS universal2 artifact that runs natively on both Apple Silicon and
+# Intel:
+#     make CC=clang ARCHFLAGS="-arch arm64 -arch x86_64"
+# Appended (not overriding) so the warning/hardening flags above still apply, and
+# passed to both the compile and link steps so every slice is built and merged.
+ARCHFLAGS ?=
+CFLAGS  += $(ARCHFLAGS)
+LDFLAGS += $(ARCHFLAGS)
+
 # Single source of truth for the version: PROG_VERSION in main.c. The SBOM is
 # stamped with it at build time (make sbom); ffpdf.1 and the sbom.json template
 # are rewritten by `make bump NEW=x.y.z`, and check-version fails the build if
