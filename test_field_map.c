@@ -113,6 +113,25 @@ static void test_read_partial_name(void) {
     // Hex UTF-16BE with a BOM: FEFF 0068 0069 -> "hi".
     CHECK(read_partial_name("<</T<FEFF00680069>>>", name, sizeof(name)) && strcmp(name, "hi") == 0);
 
+    // Non-ASCII UTF-16BE code point -> placeholder.
+    CHECK(read_partial_name("<</T<FEFF00E9>>>", name, sizeof(name)) && strcmp(name, "?") == 0);
+
+    // Hex without a BOM is PDFDocEncoding, not UTF-16: <46756C6C4E616D65> is
+    // "FullName". Decrypted names from encrypted documents arrive in this form.
+    CHECK(read_partial_name("<</T<46756C6C4E616D65>/FT/Tx>>", name, sizeof(name)) && strcmp(name, "FullName") == 0);
+
+    // Odd-length names must not be dropped or paired up: "Email" is 5 bytes.
+    CHECK(read_partial_name("<</T<456d61696c>>>", name, sizeof(name)) && strcmp(name, "Email") == 0);
+
+    // Whitespace between hex digits is ignored; a trailing odd digit pads with 0.
+    CHECK(read_partial_name("<</T<41 42\n43>>>", name, sizeof(name)) && strcmp(name, "ABC") == 0);
+    CHECK(read_partial_name("<</T<414>>>", name, sizeof(name)) && strcmp(name, "A@") == 0);
+
+    // A hex name and its literal spelling read identically.
+    char lit[256];
+    CHECK(read_partial_name("<</T(a.b)>>", lit, sizeof(lit)) &&
+          read_partial_name("<</T<612e62>>>", name, sizeof(name)) && strcmp(name, lit) == 0);
+
     // No /T -> no name.
     CHECK(read_partial_name("<</FT/Tx>>", name, sizeof(name)) == 0);
 }

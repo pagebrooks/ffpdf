@@ -326,8 +326,8 @@ static int hexval(int c) {
 }
 
 // Read the partial field name (/T) into `out`. Handles both literal strings
-// "(name)" and hex strings "<FEFF..>" (UTF-16BE, as produced by LiveCycle).
-// Returns 1 if a name is present.
+// "(name)" and hex strings, either PDFDocEncoding "<4E616D65>" or UTF-16BE with
+// a BOM "<FEFF..>" (as produced by LiveCycle). Returns 1 if a name is present.
 static int read_partial_name(const char *dict, char *out, size_t out_size) {
     const char *t = find_key(dict, "/T");
     if (!t) return 0;
@@ -343,26 +343,33 @@ static int read_partial_name(const char *dict, char *out, size_t out_size) {
         return 1;
     }
 
-    if (*t == '<') {                            // hex string, UTF-16BE
-        t++;
-        int nib[2]; int ncount = 0;
-        int high_byte = -1;
-        while (*t && *t != '>' && k < out_size - 1) {
+    if (*t == '<') {                            // hex string
+        // Decode to bytes, then interpret them like a literal string's bytes:
+        // UTF-16BE only when they begin with the FE FF BOM, otherwise
+        // PDFDocEncoding copied verbatim. Encrypted documents depend on this:
+        // pdf_decrypt_dict_strings re-emits every decrypted string as hex, so a
+        // plain "(FullName)" arrives here as "<46756c6c4e616d65>".
+        unsigned char bytes[512];
+        size_t nb = 0;
+        int hi = -1;
+        for (t++; *t && *t != '>' && nb < sizeof(bytes); t++) {
             int v = hexval((unsigned char)*t);
-            t++;
-            if (v < 0) continue;
-            nib[ncount++] = v;
-            if (ncount == 2 && high_byte < 0) { high_byte = nib[0] * 16 + nib[1]; ncount = 0; continue; }
-            if (ncount == 2 && high_byte >= 0) {
-                int low_byte = nib[0] * 16 + nib[1];
-                ncount = 0;
-                if (high_byte == 0xFE && low_byte == 0xFF) { high_byte = -1; continue; } // BOM
-                if (high_byte == 0 && low_byte >= 32 && low_byte < 127)
-                    out[k++] = (char)low_byte;                  // ASCII code point
+            if (v < 0) continue;                // whitespace between digits
+            if (hi < 0) { hi = v; continue; }
+            bytes[nb++] = (unsigned char)(hi * 16 + v);
+            hi = -1;
+        }
+        if (hi >= 0 && nb < sizeof(bytes)) bytes[nb++] = (unsigned char)(hi * 16);  // odd digit
+        if (nb >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF) {
+            for (size_t i = 2; i + 1 < nb && k < out_size - 1; i += 2) {
+                if (bytes[i] == 0 && bytes[i + 1] >= 32 && bytes[i + 1] < 127)
+                    out[k++] = (char)bytes[i + 1];              // ASCII code point
                 else
                     out[k++] = '?';                             // non-ASCII placeholder
-                high_byte = -1;
             }
+        } else {
+            for (size_t i = 0; i < nb && k < out_size - 1; i++)
+                out[k++] = (char)bytes[i];
         }
         out[k] = '\0';
         return k > 0;
