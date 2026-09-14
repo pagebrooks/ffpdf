@@ -1079,6 +1079,32 @@ for f in pdf.Root.AcroForm.Fields: walk(f)
 assert hit[0], "filled value not found after re-decryption"
 PY
     done
+
+    # Strings in directly stored (non-object-stream) objects are decrypted and
+    # re-emitted as hex, so field names must decode as PDFDocEncoding, not
+    # UTF-16. Covers the first fill and a refill of the field that fill rewrote.
+    python3 - docs/example-form.pdf "$TMP/enc_direct.pdf" <<'PY'
+import sys, pikepdf
+pdf = pikepdf.open(sys.argv[1])
+pdf.save(sys.argv[2], encryption=pikepdf.Encryption(owner="", user="", R=4, aes=True),
+         object_stream_mode=pikepdf.ObjectStreamMode.disable)
+PY
+    names() { $BIN fields "$1" 2>/dev/null | python3 -c 'import json,sys; print(" ".join(f["name"] for f in json.load(sys.stdin)["fields"]))'; }
+    plain_names=$(names docs/example-form.pdf)
+    enc_names=$(names "$TMP/enc_direct.pdf")
+    [ -n "$plain_names" ] && [ "$enc_names" = "$plain_names" ] \
+        && pass "direct objects: decrypted field names match plaintext" \
+        || fail "direct objects: field names garbled ($enc_names)"
+    echo '{"FullName": "FIRST"}'  > "$TMP/enc_v1.json"
+    echo '{"FullName": "SECOND"}' > "$TMP/enc_v2.json"
+    $BIN fill --strict -o "$TMP/enc_direct_f1.pdf" "$TMP/enc_direct.pdf" "$TMP/enc_v1.json" 2>/dev/null \
+        && $BIN fill --strict -o "$TMP/enc_direct_f2.pdf" "$TMP/enc_direct_f1.pdf" "$TMP/enc_v2.json" 2>/dev/null \
+        && python3 - "$TMP/enc_direct_f2.pdf" <<'PY' && pass "direct objects: fill, then refill the same field by name" || fail "direct objects: fill/refill by name failed"
+import sys, pikepdf
+pdf = pikepdf.open(sys.argv[1])
+vals = {str(f.T): str(f.get('/V', '')) for f in pdf.Root.AcroForm.Fields if '/T' in f}
+assert vals.get("FullName") == "SECOND", vals
+PY
 else
     echo "  skip:  pikepdf not installed (encryption round-trip not exercised)"
 fi
