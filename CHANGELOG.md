@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Encrypted PDFs whose `/O`, `/U` or `/ID` strings are written as literal
+  strings with escapes (`\n`, `\r`, `\ddd` octal, line continuations) now
+  decrypt. Each escape was read as the escaped letter, so ffpdf derived the
+  wrong file key and `fields` reported `count: 0` with exit 0 (#14). Literal
+  strings inside encrypted objects are now decoded the same spec-compliant way.
+- An encrypted PDF that cannot be decrypted is now an error instead of a silent
+  empty or garbled result. This covers files that need a password, use an
+  unsupported security handler, or derive a key that fails `/U` authentication.
+  `fields`, `fdf-extract`, `xfdf-extract` and `fill` exit 1 with the reason on
+  stderr and write nothing to stdout.
+
 ## [0.1.2] - 2026-07-31
 
 ### Added

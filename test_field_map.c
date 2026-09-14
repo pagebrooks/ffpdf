@@ -235,6 +235,64 @@ static void test_crypto(void) {
     }
 }
 
+static void test_pdf_literal_bytes(void) {
+    unsigned char b[64];
+    size_t n;
+    const char *rest;
+
+    // Named escapes decode to control bytes, not to the escaped letter.
+    rest = pdf_literal_bytes("(a\\nb\\r\\t\\b\\f)X", b, sizeof(b), &n);
+    CHECK(n == 7 && memcmp(b, "a\nb\r\t\b\f", 7) == 0 && *rest == 'X');
+
+    // Octal: one to three digits, ending at a non-octal character; overflow
+    // keeps the low byte (\400 -> 0).
+    pdf_literal_bytes("(\\0\\053\\1234\\400)", b, sizeof(b), &n);
+    CHECK(n == 5 && b[0] == 0 && b[1] == 053 && b[2] == 0123 && b[3] == '4' && b[4] == 0);
+
+    // \( \) \\ and unknown escapes stand for the character; parentheses nest.
+    pdf_literal_bytes("(\\(\\)\\\\\\q(x))", b, sizeof(b), &n);
+    CHECK(n == 7 && memcmp(b, "()\\q(x)", 7) == 0);
+
+    // Backslash-EOL continues the line (no byte); a bare CR or CRLF reads as LF.
+    pdf_literal_bytes("(ab\\\r\ncd\\\nef\r\ng\rh)", b, sizeof(b), &n);
+    CHECK(n == 10 && memcmp(b, "abcdef\ng\nh", 10) == 0);
+
+    // Output stops at `cap`, but the whole string is still consumed.
+    rest = pdf_literal_bytes("(abcdef)Z", b, 3, &n);
+    CHECK(n == 3 && memcmp(b, "abc", 3) == 0 && *rest == 'Z');
+}
+
+// pdf_crypt_init on a real R3 (RC4-128, empty user password) /Encrypt dict
+// written by qpdf, which reports the file key 71c7db54... Its /O contains LF,
+// CR, ')' and high bytes, so a literal spelling needs named and octal escapes.
+static void test_crypt_init_r3(void) {
+    static const unsigned char id0[16] = {
+        0x31,0x41,0x59,0x26,0x53,0x58,0x97,0x93,0x23,0x84,0x62,0x64,0x33,0x83,0x27,0x95 };
+    #define ENC_HEAD "<</Filter/Standard/V 2/R 3/Length 128/P -1028"
+    #define ENC_O_HEX "/O <0c27ccb0d41829a42c080a44b1c14f32dd090d74991618aa1a747d61d0cb3a90>"
+    #define ENC_U_HEX "/U <e4e9531554aa3d83eee82d978926d2b20122456a91bae5134273a6db134c87c4>"
+    PdfCrypt c, c2;
+    CHECK(pdf_crypt_init(&c, ENC_HEAD ENC_O_HEX ENC_U_HEX ">>", id0, sizeof(id0)) == 1);
+    CHECK(c.key_len == 16 && hexeq(c.key, 16, "71c7db54f327dfcb809099ee9b59183f"));
+
+    // The same /O as an escaped literal string derives the same key (issue #14).
+    const char *lit = ENC_HEAD
+        "/O (\\f'\\314\\260\\324\\030\\)\\244,\\b\\nD\\261\\301O2\\335\\t\\rt\\231\\026"
+        "\\030\\252\\032t}a\\320\\313:\\220)" ENC_U_HEX ">>";
+    CHECK(pdf_crypt_init(&c2, lit, id0, sizeof(id0)) == 1);
+    CHECK(memcmp(c2.key, c.key, 16) == 0);
+
+    // A key that does not reproduce /U is rejected: a corrupted /U (as for a
+    // document with a user password), or the wrong /ID.
+    CHECK(pdf_crypt_init(&c2, ENC_HEAD ENC_O_HEX
+          "/U <e5e9531554aa3d83eee82d978926d2b20122456a91bae5134273a6db134c87c4>>>",
+          id0, sizeof(id0)) == 0);
+    CHECK(pdf_crypt_init(&c2, ENC_HEAD ENC_O_HEX ENC_U_HEX ">>", id0, sizeof(id0) - 1) == 0);
+    #undef ENC_HEAD
+    #undef ENC_O_HEX
+    #undef ENC_U_HEX
+}
+
 static void test_lzw(void) {
     // The canonical PDF-spec (ISO 32000, 7.4.4.2) LZWDecode example: the string
     // "-----A---B" encodes to 80 0B 60 50 22 0C 0C 85 01.
@@ -257,6 +315,8 @@ static void test_lzw(void) {
 int main(void) {
     test_find_key();
     test_crypto();
+    test_pdf_literal_bytes();
+    test_crypt_init_r3();
     test_lzw();
     test_match_dict_end();
     test_extract_dict_inner();

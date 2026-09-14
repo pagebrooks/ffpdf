@@ -1784,7 +1784,8 @@ static int fill_core(const char *pdf_filename, FdfData *fdf,
     // are resolved lazily by get_object_raw (only the needed streams are ever
     // decompressed); objstm_cache_reset() frees that cache at cleanup.
     int acroform = build_field_map(f, &xref, root, &map);
-    if (acroform <= 0) {
+    if (acroform < 0) goto cleanup;                   // undecryptable; reason on stderr
+    if (acroform == 0) {
         fprintf(stderr, "ERROR: no AcroForm found in document catalog\n");
         goto cleanup;
     }

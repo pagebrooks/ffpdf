@@ -209,6 +209,46 @@ const char *read_literal_alloc(const char *p, char **out) {
     return p;
 }
 
+const char *pdf_literal_bytes(const char *p, unsigned char *out, size_t cap, size_t *len) {
+    size_t n = 0;
+    int depth = 1;
+#define PUT(b) do { if (n < cap) out[n++] = (unsigned char)(b); } while (0)
+    p++;   // skip '('
+    while (*p) {
+        unsigned char c = (unsigned char)*p++;
+        if (c == '\\') {
+            if (!*p) break;
+            c = (unsigned char)*p++;
+            switch (c) {
+                case 'n': PUT('\n'); break;
+                case 'r': PUT('\r'); break;
+                case 't': PUT('\t'); break;
+                case 'b': PUT('\b'); break;
+                case 'f': PUT('\f'); break;
+                case '\r': if (*p == '\n') p++; break;   // line continuation: no byte
+                case '\n': break;
+                default:
+                    if (c >= '0' && c <= '7') {           // \d, \dd or \ddd octal
+                        int v = c - '0';
+                        for (int i = 0; i < 2 && *p >= '0' && *p <= '7'; i++)
+                            v = v * 8 + (*p++ - '0');
+                        PUT(v & 0xff);                    // high-order overflow ignored
+                    } else {
+                        PUT(c);                           // \( \) \\ and unknown escapes
+                    }
+            }
+            continue;
+        }
+        if (c == '(') depth++;
+        else if (c == ')' && --depth == 0) break;
+        else if (c == '\r') { if (*p == '\n') p++; c = '\n'; }   // bare EOL reads as LF
+        PUT(c);
+    }
+#undef PUT
+    *len = n;
+    return p;
+}
+
 char *extract_dict_inner_alloc(const char *obj_dict) {
     const char *open = strstr(obj_dict, "<<");
     if (!open) return NULL;
