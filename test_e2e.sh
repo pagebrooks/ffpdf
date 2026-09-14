@@ -1069,7 +1069,7 @@ PY
     # derive the same file key as its hex spelling (issue #14: escapes were read
     # as the escaped letter, so every object-stream field vanished, exit 0). A
     # key that fails /U authentication must be an error, not an empty list.
-    python3 - docs/example-form.pdf "$TMP" <<'PY'
+    python3 - docs/example-form.pdf "$TMP" <<'PY' || fail "escaped /O, bad /U, user password: fixture generation failed"
 import io, re, sys, pikepdf
 src, tmp = sys.argv[1], sys.argv[2]
 NAMED = {0x0a: b'\\n', 0x0d: b'\\r', 0x09: b'\\t', 0x08: b'\\b', 0x0c: b'\\f'}
@@ -1098,7 +1098,8 @@ start, end = m.start(1) - 1, m.end()
 lit = literal(O)
 assert len(lit) <= end - start
 open(f"{tmp}/enc_esc_lit.pdf", "wb").write(raw[:start] + lit + b" " * (end - start - len(lit)) + raw[end:])
-assert len(pikepdf.open(f"{tmp}/enc_esc_lit.pdf").Root.AcroForm.Fields) > 0
+with pikepdf.open(f"{tmp}/enc_esc_lit.pdf") as chk:   # hold a reference: newer
+    assert len(chk.Root.AcroForm.Fields) > 0            # pikepdf frees temporaries
 mu = re.search(rb'/U\s*<([0-9a-fA-F]+)>', raw)
 flip = b"1" if raw[mu.start(1)] == ord("0") else b"0"
 open(f"{tmp}/enc_bad_u.pdf", "wb").write(raw[:mu.start(1)] + flip + raw[mu.start(1) + 1:])
@@ -1117,9 +1118,9 @@ PY
             || fail "$v: fields exit=$ec, stdout $(wc -c < "$TMP/enc_$v.out") bytes"
     done
     echo '{"FullName": "X"}' > "$TMP/enc_pw.json"
-    $BIN fill -o "$TMP/enc_userpw_filled.pdf" "$TMP/enc_userpw.pdf" "$TMP/enc_pw.json" 2>/dev/null; ec=$?
-    [ "$ec" -eq 1 ] && [ ! -e "$TMP/enc_userpw_filled.pdf" ] \
-        && pass "userpw: fill exits 1 and writes no output" \
+    $BIN fill -o "$TMP/enc_userpw_filled.pdf" "$TMP/enc_userpw.pdf" "$TMP/enc_pw.json" 2> "$TMP/enc_userpw_fill.err"; ec=$?
+    [ "$ec" -eq 1 ] && [ ! -e "$TMP/enc_userpw_filled.pdf" ] && grep -q 'cannot be decrypted' "$TMP/enc_userpw_fill.err" \
+        && pass "userpw: fill exits 1, reason on stderr, no output" \
         || fail "userpw: fill exit=$ec"
 
     for v in rc4 aes1 aes2; do
