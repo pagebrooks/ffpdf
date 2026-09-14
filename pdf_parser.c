@@ -229,6 +229,16 @@ PdfObject parse_obj_at_offset(FILE *f, long offset, const PdfCrypt *crypt) {
                 j += 2;
                 continue;
             }
+            if (ch == '<') {                       // hex string, copied through its '>'
+                // Consumed whole BEFORE the ">>" check below: in "/V<ab>>>" the
+                // string's own '>' must not pair with the dict's closing '>'.
+                while (j < got) {
+                    char hc = win[j++];
+                    if (dp < MAX_DICT - 1) obj.dictionary[dp++] = hc;
+                    if (hc == '>') break;
+                }
+                continue;
+            }
             if (ch == '>' && j + 1 < got && win[j + 1] == '>') {
                 depth--;
                 if (dp < MAX_DICT - 2) { obj.dictionary[dp++] = '>'; obj.dictionary[dp++] = '>'; }

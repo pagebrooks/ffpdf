@@ -76,6 +76,47 @@ static void test_match_dict_end(void) {
     CHECK(match_dict_end("<</A 1") == NULL);
 }
 
+// Run parse_obj_at_offset over `text` written to a scratch file (a real file
+// rather than fmemopen, which MinGW lacks).
+static PdfObject parse_text_obj(const char *text) {
+    PdfObject o = {0};
+    const char *path = "test_parse_obj.tmp";
+    FILE *f = fopen(path, "w+b");
+    if (!f) return o;
+    fputs(text, f);
+    o = parse_obj_at_offset(f, 0, NULL);
+    fclose(f);
+    remove(path);
+    return o;
+}
+
+static void test_parse_obj_dict_capture(void) {
+    // A hex string as the last value: its '>' must not pair with the dict's
+    // closing '>' (issue #15), or the dictionary is cut one byte short and the
+    // stream after it is never found.
+    PdfObject o = parse_text_obj("1 0 obj\n<</Length 5/ID<abcd>>>\nstream\nhello\nendstream\nendobj\n");
+    CHECK(strcmp(o.dictionary, "<</Length 5/ID<abcd>>>") == 0);
+    CHECK(o.stream && o.stream_len == 5 && memcmp(o.stream, "hello", 5) == 0);
+    free(o.stream);
+
+    // The empty hex string "<>" in the same position.
+    o = parse_text_obj("1 0 obj\n<</Length 5/X<>>>\nstream\nhello\nendstream\nendobj\n");
+    CHECK(strcmp(o.dictionary, "<</Length 5/X<>>>") == 0);
+    CHECK(o.stream && o.stream_len == 5);
+    free(o.stream);
+
+    // The shape from the issue: every string is hex, as in encrypted documents.
+    o = parse_text_obj("1280 0 obj\n<</DA<2b8c>/V<0061c223>>>\nendobj\n");
+    CHECK(strcmp(o.dictionary, "<</DA<2b8c>/V<0061c223>>>") == 0);
+    CHECK(o.stream == NULL);
+
+    // A nested dictionary ending in a hex string still balances.
+    o = parse_text_obj("1 0 obj\n<</A<</B<ab>>>/Length 5>>\nstream\nhello\nendstream\nendobj\n");
+    CHECK(strcmp(o.dictionary, "<</A<</B<ab>>>/Length 5>>") == 0);
+    CHECK(o.stream && o.stream_len == 5);
+    free(o.stream);
+}
+
 static void test_extract_dict_inner(void) {
     char out[512];
     CHECK(extract_dict_inner("<</A 1>>", out, sizeof(out)) == 0 && strcmp(out, "/A 1") == 0);
@@ -259,6 +300,7 @@ int main(void) {
     test_crypto();
     test_lzw();
     test_match_dict_end();
+    test_parse_obj_dict_capture();
     test_extract_dict_inner();
     test_remove_entry();
     test_read_partial_name();

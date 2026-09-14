@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Object dictionaries that end in a hex string right before `>>` (for example
+  `/V<ab>>>`) are now read whole. The hex string's closing `>` was paired with
+  the dictionary's, cutting the dictionary one byte short. For a stream object
+  such as an object stream, the stream was then never found and the fields
+  inside it silently disappeared (#15).
+
 ## [0.1.2] - 2026-07-31
 
 ### Added
