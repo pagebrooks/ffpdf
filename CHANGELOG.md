@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unsupported security handler, or derive a key that fails `/U` authentication.
   `fields`, `fdf-extract`, `xfdf-extract` and `fill` exit 1 with the reason on
   stderr and write nothing to stdout.
+- Encrypted forms: field names stored outside object streams no longer read as
+  `????`. Decrypted strings are re-emitted as hex, and hex field names were
+  always decoded as UTF-16BE even without the FE FF byte-order mark. `fields`
+  listed garbled names, and `fill` reported every such field as not found. This
+  hit the first fill of forms saved without object streams, and any refill of a
+  field an earlier fill had rewritten.
 
 ## [0.1.2] - 2026-07-31
 
