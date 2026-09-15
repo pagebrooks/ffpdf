@@ -994,6 +994,44 @@ printf '%%FDF-1.2\n1 0 obj\n<< /FDF << /Fields [ << /T (predfield) /V (PREDICTOR
 $BIN fill "$TMP/pred.fdf" "$TMP/predobjstm.pdf" 2>/dev/null | grep -qa 'PREDICTOR_OK' \
     && pass "predictor-objstm: fill fills the field" || fail "predictor-objstm: fill failed"
 
+echo "== object stream whose dictionary ends in a hex string =="
+# The object stream's dictionary ends "/Tag<...>>>". The hex string's closing
+# '>' must not pair with the dictionary's closing '>' (issue #15): that cut the
+# dictionary one byte short, the stream was never found, and the field inside
+# the object stream silently disappeared.
+python3 - "$TMP/hexdict.pdf" <<'PY'
+import sys, zlib
+field6 = b"<</FT/Tx/T(hexdictfield)/Type/Annot/Subtype/Widget/Rect[100 700 300 720]/P 3 0 R>>"
+index = b"6 0 "; first = len(index)
+comp = zlib.compress(index + field6)
+obj5 = (b"<</Type/ObjStm/N 1/First %d/Length %d/Filter/FlateDecode/Tag<6865782d64696374>>>\nstream\n"
+        % (first, len(comp)) + comp + b"\nendstream")
+objs = {1: b"<</Type/Catalog/Pages 2 0 R/AcroForm 4 0 R>>",
+        2: b"<</Type/Pages/Kids[3 0 R]/Count 1>>",
+        3: b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Annots[6 0 R]>>",
+        4: b"<</Fields[6 0 R]/DA(/Helv 0 Tf 0 g)>>"}
+out = bytearray(b"%PDF-1.5\n%\xe2\xe3\xcf\xd3\n"); off = {}
+for n in (1, 2, 3, 4):
+    off[n] = len(out); out += (b"%d 0 obj\n" % n) + objs[n] + b"\nendobj\n"
+off[5] = len(out); out += b"5 0 obj\n" + obj5 + b"\nendobj\n"
+off[7] = len(out)
+def rec(t, a, b): return bytes([t]) + a.to_bytes(2, 'big') + bytes([b])
+data = rec(0, 0, 255)
+for n in (1, 2, 3, 4, 5): data += rec(1, off[n], 0)
+data += rec(2, 5, 0) + rec(1, off[7], 0)
+xcomp = zlib.compress(data)
+obj7 = (b"<</Type/XRef/Size 8/Root 1 0 R/W[1 2 1]/Index[0 8]/Length %d/Filter/FlateDecode>>\nstream\n" % len(xcomp)
+        + xcomp + b"\nendstream")
+out += b"7 0 obj\n" + obj7 + b"\nendobj\n"
+out += b"startxref\n%d\n%%%%EOF\n" % off[7]
+open(sys.argv[1], 'wb').write(out)
+PY
+$BIN fdf-extract "$TMP/hexdict.pdf" 2>/dev/null | grep -q 'hexdictfield' \
+    && pass "hex-terminated ObjStm dict: fdf-extract lists the field" || fail "hex-terminated ObjStm dict: field missing"
+printf '%%FDF-1.2\n1 0 obj\n<< /FDF << /Fields [ << /T (hexdictfield) /V (HEXDICT_OK) >> ] >> >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%%%EOF\n' > "$TMP/hexdict.fdf"
+$BIN fill "$TMP/hexdict.fdf" "$TMP/hexdict.pdf" 2>/dev/null | grep -qa 'HEXDICT_OK' \
+    && pass "hex-terminated ObjStm dict: fill fills the field" || fail "hex-terminated ObjStm dict: fill failed"
+
 echo "== LZWDecode object stream =="
 # A field object stored in an LZWDecode-compressed object stream. Only a decoder
 # that implements PDF LZW can reach 'lzwfield'. The stream is compressed with a
