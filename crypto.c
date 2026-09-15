@@ -391,8 +391,8 @@ static const unsigned char PDF_PAD[32] = {
     0x28,0xBF,0x4E,0x5E,0x4E,0x75,0x8A,0x41,0x64,0x00,0x4E,0x56,0xFF,0xFA,0x01,0x08,
     0x2E,0x2E,0x00,0xB6,0xD0,0x68,0x3E,0x80,0x2F,0x0C,0xA9,0xFE,0x64,0x53,0x69,0x7A };
 
-// Parse a hex string "<...>" starting at *p (which points just past '<') into
-// buf; returns byte count. Also handles literal "(...)" if p points at '('.
+// Parse the hex "<...>" or literal "(...)" string at `v` into buf; returns the
+// byte count (at most `cap`).
 static int parse_pdf_bytes(const char *v, unsigned char *buf, int cap) {
     if (*v == '<') {
         v++;
@@ -410,13 +410,9 @@ static int parse_pdf_bytes(const char *v, unsigned char *buf, int cap) {
         return n;
     }
     if (*v == '(') {                                  // literal string with escapes
-        v++;
-        int n = 0;
-        while (*v && *v != ')' && n < cap) {
-            if (*v == '\\' && v[1]) { v++; buf[n++] = (unsigned char)*v++; continue; }
-            buf[n++] = (unsigned char)*v++;
-        }
-        return n;
+        size_t n;
+        pdf_literal_bytes(v, buf, (size_t)cap, &n);
+        return (int)n;
     }
     return 0;
 }
@@ -486,7 +482,6 @@ int pdf_crypt_init(PdfCrypt *c, const char *enc, const unsigned char *id0, size_
     if (!po || !pu) return 0;
     int olen = parse_pdf_bytes(po, O, sizeof(O));
     int ulen = parse_pdf_bytes(pu, U, sizeof(U));
-    (void)ulen;
 
     if (c->R >= 5) {
         // R6 (AES-256): validate empty user password and unwrap the file key.
@@ -534,7 +529,28 @@ int pdf_crypt_init(PdfCrypt *c, const char *enc, const unsigned char *id0, size_
     md5(buf, n, h);
     if (c->R >= 3) for (int i = 0; i < 50; i++) md5(h, c->key_len, h);
     memcpy(c->key, h, c->key_len);
-    return 1;
+
+    // Authenticate the empty user password by recomputing /U from the derived
+    // key (Algorithm 4 for R2, Algorithm 5 for R3/R4). A mismatch means the key
+    // is wrong: the document needs a password, or /O, /P or /ID was misread.
+    // Accepting it anyway would decrypt every string and stream to garbage.
+    unsigned char ucheck[32];
+    if (c->R < 3) {
+        rc4(c->key, c->key_len, PDF_PAD, 32, ucheck);
+        return ulen >= 32 && memcmp(ucheck, U, 32) == 0;
+    }
+    unsigned char uin[32 + 64];
+    size_t il = id0_len < 64 ? id0_len : 64;
+    memcpy(uin, PDF_PAD, 32);
+    memcpy(uin + 32, id0, il);
+    md5(uin, 32 + il, h);
+    rc4(c->key, c->key_len, h, 16, ucheck);
+    for (int i = 1; i <= 19; i++) {
+        unsigned char k2[16];
+        for (int j = 0; j < c->key_len; j++) k2[j] = c->key[j] ^ (unsigned char)i;
+        rc4(k2, c->key_len, ucheck, 16, ucheck);
+    }
+    return ulen >= 16 && memcmp(ucheck, U, 16) == 0;
 }
 
 // Derive the per-object key (Algorithm 1) for RC4/AESV2 into `ok`, returns len.
@@ -602,13 +618,7 @@ char *pdf_decrypt_dict_strings(const PdfCrypt *c, int num, int gen, const char *
                 if (hi >= 0) ct[cl++] = (unsigned char)(hi*16);
                 if (*q == '>') q++;
             } else {
-                int sdepth = 1;
-                while (*q && sdepth > 0) {
-                    if (*q == '\\' && q[1]) { q++; ct[cl++] = (unsigned char)*q++; continue; }
-                    if (*q == '(') { sdepth++; ct[cl++] = '('; q++; continue; }
-                    if (*q == ')') { sdepth--; if (sdepth == 0) { q++; break; } ct[cl++] = ')'; q++; continue; }
-                    ct[cl++] = (unsigned char)*q++;
-                }
+                q = pdf_literal_bytes(p, ct, len + 1, &cl);
             }
             unsigned char *pt = malloc(cl + 1);
             int pl = pdf_decrypt(c, num, gen, ct, cl, pt);
@@ -667,13 +677,7 @@ char *pdf_encrypt_dict_strings(const PdfCrypt *c, int num, int gen, const char *
                 if (hi >= 0) pt[pl++] = (unsigned char)(hi*16);
                 if (*q == '>') q++;
             } else {
-                int sdepth = 1;
-                while (*q && sdepth > 0) {
-                    if (*q == '\\' && q[1]) { q++; pt[pl++] = (unsigned char)*q++; continue; }
-                    if (*q == '(') { sdepth++; pt[pl++] = '('; q++; continue; }
-                    if (*q == ')') { sdepth--; if (sdepth == 0) { q++; break; } pt[pl++] = ')'; q++; continue; }
-                    pt[pl++] = (unsigned char)*q++;
-                }
+                q = pdf_literal_bytes(p, pt, len + 1, &pl);
             }
             unsigned char *ct = malloc(pl + 40);
             int cl = pdf_encrypt(c, num, gen, pt, pl, ct, pl + 40);

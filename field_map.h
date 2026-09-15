@@ -38,8 +38,10 @@ typedef struct {
 // Walk the AcroForm field tree, recording every named node. EXTENDS support must
 // already be initialised by the caller (init_form_extractor_extends_support).
 // `root_obj` is the /Root (catalog) object number, or <=0 to have it resolved
-// from the trailer. Returns the AcroForm object number (>0) on success, or 0 if
-// no AcroForm/Fields were found. Populates `map` (free with field_map_free).
+// from the trailer. Returns the AcroForm object number (>0) on success, 0 if no
+// AcroForm/Fields were found, or -1 if the document is encrypted but cannot be
+// decrypted (the reason is printed to stderr and nothing is walked). Populates
+// `map` (free with field_map_free).
 int build_field_map(FILE *f, XRefTable *xref, int root_obj, FieldMap *map);
 void field_map_free(FieldMap *map);
 

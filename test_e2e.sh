@@ -1102,6 +1102,65 @@ for name, enc in variants.items():
 PY
     nplain=$(grep -c '^/T (' "$TMP/out.fdf")
     printf '%%FDF-1.2\n1 0 obj\n<< /FDF << /Fields [ << /T (%s) /V (ENC_ROUNDTRIP) >> ] >> >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%%%EOF\n' "$NAME" > "$TMP/enc.fdf"
+
+    # An /O written as a literal string with spec escapes (\n, \r, \000) must
+    # derive the same file key as its hex spelling (issue #14: escapes were read
+    # as the escaped letter, so every object-stream field vanished, exit 0). A
+    # key that fails /U authentication must be an error, not an empty list.
+    python3 - docs/example-form.pdf "$TMP" <<'PY' || fail "escaped /O, bad /U, user password: fixture generation failed"
+import io, re, sys, pikepdf
+src, tmp = sys.argv[1], sys.argv[2]
+NAMED = {0x0a: b'\\n', 0x0d: b'\\r', 0x09: b'\\t', 0x08: b'\\b', 0x0c: b'\\f'}
+def literal(bs):
+    out = b'('
+    for c in bs:
+        if c in NAMED: out += NAMED[c]
+        elif c in (0x28, 0x29, 0x5c): out += b'\\' + bytes([c])
+        elif c == 0: out += b'\\000'
+        else: out += bytes([c])
+    return out + b')'
+pdf = pikepdf.open(src)
+for i in range(5000):                       # R4 /O depends only on the passwords
+    buf = io.BytesIO()
+    pdf.save(buf, encryption=pikepdf.Encryption(owner=f"own{i}", user="", R=4, aes=True),
+             object_stream_mode=pikepdf.ObjectStreamMode.generate)
+    raw = buf.getvalue()
+    m = re.search(rb'/O\s*<([0-9a-fA-F]+)>', raw)
+    O = bytes.fromhex(m.group(1).decode())
+    if (0x0a in O or 0x0d in O) and 0 in O:
+        break
+else:
+    sys.exit("no /O with both an EOL byte and a NUL")
+# Same-length, space-padded rewrites keep every xref offset valid.
+start, end = m.start(1) - 1, m.end()
+lit = literal(O)
+assert len(lit) <= end - start
+open(f"{tmp}/enc_esc_lit.pdf", "wb").write(raw[:start] + lit + b" " * (end - start - len(lit)) + raw[end:])
+with pikepdf.open(f"{tmp}/enc_esc_lit.pdf") as chk:   # hold a reference: newer
+    assert len(chk.Root.AcroForm.Fields) > 0            # pikepdf frees temporaries
+mu = re.search(rb'/U\s*<([0-9a-fA-F]+)>', raw)
+flip = b"1" if raw[mu.start(1)] == ord("0") else b"0"
+open(f"{tmp}/enc_bad_u.pdf", "wb").write(raw[:mu.start(1)] + flip + raw[mu.start(1) + 1:])
+pdf.save(f"{tmp}/enc_userpw.pdf", encryption=pikepdf.Encryption(owner="o", user="secret", R=4, aes=True))
+PY
+    json_names() { python3 -c 'import json,sys; print(" ".join(f["name"] for f in json.load(sys.stdin)["fields"]))' 2>/dev/null; }
+    plain_names=$($BIN fields docs/example-form.pdf 2>/dev/null | json_names)
+    esc_names=$($BIN fields "$TMP/enc_esc_lit.pdf" 2>/dev/null | json_names)
+    [ -n "$plain_names" ] && [ "$esc_names" = "$plain_names" ] \
+        && pass "escaped literal /O: same file key as hex, fields decrypt" \
+        || fail "escaped literal /O: wrong file key (fields: '$esc_names')"
+    for v in bad_u userpw; do
+        $BIN fields "$TMP/enc_$v.pdf" > "$TMP/enc_$v.out" 2> "$TMP/enc_$v.err"; ec=$?
+        [ "$ec" -eq 1 ] && [ ! -s "$TMP/enc_$v.out" ] && grep -q 'cannot be decrypted' "$TMP/enc_$v.err" \
+            && pass "$v: fields fails loudly (exit 1, reason on stderr, no stdout)" \
+            || fail "$v: fields exit=$ec, stdout $(wc -c < "$TMP/enc_$v.out") bytes"
+    done
+    echo '{"FullName": "X"}' > "$TMP/enc_pw.json"
+    $BIN fill -o "$TMP/enc_userpw_filled.pdf" "$TMP/enc_userpw.pdf" "$TMP/enc_pw.json" 2> "$TMP/enc_userpw_fill.err"; ec=$?
+    [ "$ec" -eq 1 ] && [ ! -e "$TMP/enc_userpw_filled.pdf" ] && grep -q 'cannot be decrypted' "$TMP/enc_userpw_fill.err" \
+        && pass "userpw: fill exits 1, reason on stderr, no output" \
+        || fail "userpw: fill exit=$ec"
+
     for v in rc4 aes1 aes2; do
         n=$($BIN fdf-extract "$TMP/enc_$v.pdf" 2>/dev/null | grep -c '^/T (')
         [ "$n" = "$nplain" ] && pass "$v: extracted $n fields (decrypted)" || fail "$v: extracted $n/$nplain fields"
@@ -1117,6 +1176,32 @@ for f in pdf.Root.AcroForm.Fields: walk(f)
 assert hit[0], "filled value not found after re-decryption"
 PY
     done
+
+    # Strings in directly stored (non-object-stream) objects are decrypted and
+    # re-emitted as hex, so field names must decode as PDFDocEncoding, not
+    # UTF-16. Covers the first fill and a refill of the field that fill rewrote.
+    python3 - docs/example-form.pdf "$TMP/enc_direct.pdf" <<'PY'
+import sys, pikepdf
+pdf = pikepdf.open(sys.argv[1])
+pdf.save(sys.argv[2], encryption=pikepdf.Encryption(owner="", user="", R=4, aes=True),
+         object_stream_mode=pikepdf.ObjectStreamMode.disable)
+PY
+    names() { $BIN fields "$1" 2>/dev/null | python3 -c 'import json,sys; print(" ".join(f["name"] for f in json.load(sys.stdin)["fields"]))'; }
+    plain_names=$(names docs/example-form.pdf)
+    enc_names=$(names "$TMP/enc_direct.pdf")
+    [ -n "$plain_names" ] && [ "$enc_names" = "$plain_names" ] \
+        && pass "direct objects: decrypted field names match plaintext" \
+        || fail "direct objects: field names garbled ($enc_names)"
+    echo '{"FullName": "FIRST"}'  > "$TMP/enc_v1.json"
+    echo '{"FullName": "SECOND"}' > "$TMP/enc_v2.json"
+    $BIN fill --strict -o "$TMP/enc_direct_f1.pdf" "$TMP/enc_direct.pdf" "$TMP/enc_v1.json" 2>/dev/null \
+        && $BIN fill --strict -o "$TMP/enc_direct_f2.pdf" "$TMP/enc_direct_f1.pdf" "$TMP/enc_v2.json" 2>/dev/null \
+        && python3 - "$TMP/enc_direct_f2.pdf" <<'PY' && pass "direct objects: fill, then refill the same field by name" || fail "direct objects: fill/refill by name failed"
+import sys, pikepdf
+pdf = pikepdf.open(sys.argv[1])
+vals = {str(f.T): str(f.get('/V', '')) for f in pdf.Root.AcroForm.Fields if '/T' in f}
+assert vals.get("FullName") == "SECOND", vals
+PY
 else
     echo "  skip:  pikepdf not installed (encryption round-trip not exercised)"
 fi

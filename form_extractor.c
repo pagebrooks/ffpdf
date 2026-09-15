@@ -57,9 +57,10 @@ static void print_xml_attr(const char *name) {
     }
 }
 
-void extract_form_fields_xfdf(FILE *f, const XRefTable *xref_table) {
+int extract_form_fields_xfdf(FILE *f, const XRefTable *xref_table) {
     FieldMap map = {0};
     int acroform = build_field_map(f, (XRefTable *)xref_table, 0, &map);
+    if (acroform < 0) { objstm_cache_reset(); return 1; }   // reason on stderr
 
     printf("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     printf("<xfdf xmlns=\"http://ns.adobe.com/xfdf/\" xml:space=\"preserve\">\n");
@@ -96,11 +97,15 @@ void extract_form_fields_xfdf(FILE *f, const XRefTable *xref_table) {
 
     field_map_free(&map);
     objstm_cache_reset();
+    return 0;
 }
 
-void extract_form_fields_fdf(FILE *f, const XRefTable *xref_table) {
+int extract_form_fields_fdf(FILE *f, const XRefTable *xref_table) {
     FieldMap map = {0};
-    build_field_map(f, (XRefTable *)xref_table, 0, &map);
+    if (build_field_map(f, (XRefTable *)xref_table, 0, &map) < 0) {
+        objstm_cache_reset();
+        return 1;                                   // reason on stderr
+    }
 
     printf("%%FDF-1.2\n1 0 obj\n<<\n/FDF\n<<\n/Fields [\n");
     for (int i = 0; i < map.count; i++) {
@@ -127,6 +132,7 @@ void extract_form_fields_fdf(FILE *f, const XRefTable *xref_table) {
 
     field_map_free(&map);
     objstm_cache_reset();
+    return 0;
 }
 
 /* ==========================================================================
@@ -317,9 +323,12 @@ static void map_annots_to_pages(FILE *f, XRefTable *xref, int node, int depth,
     free(d);
 }
 
-void extract_form_fields_json(FILE *f, const XRefTable *xref_table) {
+int extract_form_fields_json(FILE *f, const XRefTable *xref_table) {
     FieldMap map = {0};
-    build_field_map(f, (XRefTable *)xref_table, 0, &map);
+    if (build_field_map(f, (XRefTable *)xref_table, 0, &map) < 0) {
+        objstm_cache_reset();
+        return 1;                                   // reason on stderr
+    }
 
     // Document-level facts an agent needs to interpret the field list: whether
     // the form is XFA (AcroForm /XFA) and, if so, whether it is dynamic
@@ -449,4 +458,5 @@ void extract_form_fields_json(FILE *f, const XRefTable *xref_table) {
     free(pmap);
     field_map_free(&map);
     objstm_cache_reset();
+    return 0;
 }
