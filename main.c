@@ -175,16 +175,17 @@ static int cmd_extract(int mode, const char *path) {
         return 1;
     }
 
+    int rc;
     if (mode == 2)
-        extract_form_fields_json(f, &xref_table);
+        rc = extract_form_fields_json(f, &xref_table);
     else if (mode == 1)
-        extract_form_fields_xfdf(f, &xref_table);
+        rc = extract_form_fields_xfdf(f, &xref_table);
     else
-        extract_form_fields_fdf(f, &xref_table);
+        rc = extract_form_fields_fdf(f, &xref_table);
 
     xref_free(&xref_table);
     fclose(f);
-    return 0;
+    return rc;
 }
 
 // Run `fill`: resolve the stdin-FDF and -o conventions, then delegate to

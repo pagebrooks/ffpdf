@@ -528,23 +528,25 @@ int pdf_doc_id0(unsigned char *out, int cap) {
 
 // Detect /Encrypt in the trailer / xref-stream dict and, for the empty user
 // password, initialize the document crypt handler so subsequent object reads
-// decrypt. No-op (and clears any previous handler) when the document is not
-// encrypted or the handler is unsupported.
-static void pdf_crypt_setup(FILE *f, XRefTable *xref) {
+// decrypt. Returns 0 when the document is not encrypted or the handler is
+// ready. Returns -1 (after printing why) when /Encrypt is present but unusable:
+// every read would yield ciphertext, so callers must stop rather than report an
+// empty or garbled form as if it were real.
+static int pdf_crypt_setup(FILE *f, XRefTable *xref) {
     g_doc.encrypted = 0;
     long sx = find_startxref(f);
-    if (sx < 0) return;
+    if (sx < 0) return 0;
     fseek(f, 0, SEEK_END);
     long end = ftell(f), span = end - sx;
-    if (span <= 0) return;
+    if (span <= 0) return 0;
     char *buf = malloc((size_t)span + 1);
-    if (!buf) return;
+    if (!buf) return 0;
     fseek(f, sx, SEEK_SET);
     size_t got = fread(buf, 1, (size_t)span, f);
     buf[got] = '\0';
 
     const char *ep = strstr(buf, "/Encrypt");
-    if (!ep) { free(buf); return; }
+    if (!ep) { free(buf); return 0; }
     int enc_obj = parse_ref_num(ep + 8);
 
     // First element of the /ID array (part of the R2-4 key derivation).
@@ -568,39 +570,41 @@ static void pdf_crypt_setup(FILE *f, XRefTable *xref) {
             }
             if (hi >= 0 && id0_len < (int)sizeof(id0)) id0[id0_len++] = (unsigned char)(hi*16);
         } else if (*b == '(') {
-            b++;
-            while (*b && *b != ')' && id0_len < (int)sizeof(id0)) {
-                if (*b == '\\' && b[1]) { b++; id0[id0_len++] = (unsigned char)*b++; continue; }
-                id0[id0_len++] = (unsigned char)*b++;
-            }
+            size_t n;
+            pdf_literal_bytes(b, id0, sizeof(id0), &n);
+            id0_len = (int)n;
         }
     }
     free(buf);
-    if (enc_obj <= 0) return;
 
     // Read the /Encrypt dictionary raw -- the handler is not active yet, so its
     // /O /U /Perms strings (which are never encrypted) are read verbatim.
-    char *ed = get_object_raw(f, xref, enc_obj, NULL);
-    if (ed) {
-        if (pdf_crypt_init(&g_doc.crypt, ed, id0, id0_len)) {
-            g_doc.encrypted = 1;
-            g_doc.enc_obj = enc_obj;
-            g_doc.enc_id0_len = id0_len < (int)sizeof(g_doc.enc_id0) ? id0_len : (int)sizeof(g_doc.enc_id0);
-            memcpy(g_doc.enc_id0, id0, g_doc.enc_id0_len);
-            fprintf(stderr, "Encrypted document: standard handler V%d R%d, %s (empty user password)\n",
-                    g_doc.crypt.V, g_doc.crypt.R,
-                    g_doc.crypt.cfm == CFM_RC4 ? "RC4" : g_doc.crypt.cfm == CFM_AESV2 ? "AES-128" : "AES-256");
-        } else {
-            fprintf(stderr, "WARNING: /Encrypt present but unsupported or non-empty password; "
-                            "reads will fail\n");
-        }
-        free(ed);
+    char *ed = enc_obj > 0 ? get_object_raw(f, xref, enc_obj, NULL) : NULL;
+    if (!ed) {
+        fprintf(stderr, "ERROR: encrypted document, but its /Encrypt dictionary could not be read\n");
+        return -1;
     }
+    int ok = pdf_crypt_init(&g_doc.crypt, ed, id0, id0_len);
+    free(ed);
+    if (!ok) {
+        fprintf(stderr, "ERROR: encrypted document (V%d R%d) cannot be decrypted: it needs a "
+                        "password or uses an unsupported security handler (only the empty "
+                        "user password is supported)\n", g_doc.crypt.V, g_doc.crypt.R);
+        return -1;
+    }
+    g_doc.encrypted = 1;
+    g_doc.enc_obj = enc_obj;
+    g_doc.enc_id0_len = id0_len < (int)sizeof(g_doc.enc_id0) ? id0_len : (int)sizeof(g_doc.enc_id0);
+    memcpy(g_doc.enc_id0, id0, g_doc.enc_id0_len);
+    fprintf(stderr, "Encrypted document: standard handler V%d R%d, %s (empty user password)\n",
+            g_doc.crypt.V, g_doc.crypt.R,
+            g_doc.crypt.cfm == CFM_RC4 ? "RC4" : g_doc.crypt.cfm == CFM_AESV2 ? "AES-128" : "AES-256");
+    return 0;
 }
 
 int build_field_map(FILE *f, XRefTable *xref, int root_obj, FieldMap *map) {
     decompress_reset();       // fresh per-run decompression budget
-    pdf_crypt_setup(f, xref);
+    if (pdf_crypt_setup(f, xref) < 0) return -1;   // encrypted but undecryptable
     if (root_obj <= 0) root_obj = find_root_obj(f);
     if (root_obj <= 0) return 0;
 

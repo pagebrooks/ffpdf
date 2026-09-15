@@ -250,8 +250,10 @@ Maximum total decompressed bytes over one run (default 1 GB).
 Success.
 .TP
 .B 1
-An error occurred: invalid usage, a file that could not be opened, or a PDF
-whose cross\-reference table could not be parsed.
+An error occurred: invalid usage, a file that could not be opened, a PDF
+whose cross\-reference table could not be parsed, or an encrypted PDF that
+cannot be decrypted (it needs a password, or uses an unsupported security
+handler).
 .TP
 .B 2
 .B fill

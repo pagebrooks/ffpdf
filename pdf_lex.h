@@ -67,6 +67,16 @@ const char *read_literal(const char *p, char *out, size_t out_size);
 // (caller frees; never truncates). Returns a pointer past the closing ')'.
 const char *read_literal_alloc(const char *p, char **out);
 
+// Decode the literal string starting at '(' into raw bytes per ISO 32000-1
+// 7.3.4.2: balanced parentheses; the escapes \n \r \t \b \f \( \) \\; octal
+// \d, \dd and \ddd; a backslash before an end-of-line continues the line (no
+// byte); an unescaped CR, LF or CRLF reads as one LF; any other escaped
+// character stands for itself. At most `cap` bytes are stored (the rest of the
+// string is still consumed) and *len is set to the count. Binary-safe for
+// escaped bytes, so use this wherever exact bytes matter (encryption keys,
+// ciphertext). Returns a pointer past the closing ')'.
+const char *pdf_literal_bytes(const char *p, unsigned char *out, size_t cap, size_t *len);
+
 // Object number of an indirect reference "N G R" at `p` (leading ws skipped).
 int parse_ref_num(const char *p);
 

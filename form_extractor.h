@@ -18,12 +18,16 @@
 
 // Extract the form's fillable fields to stdout, as FDF or XFDF. Both are thin
 // presentation layers over build_field_map() (see field_map.h).
-void extract_form_fields_fdf(FILE *f, const XRefTable *xref_table);
-void extract_form_fields_xfdf(FILE *f, const XRefTable *xref_table);
+//
+// All three extractors return 0 on success, or 1 when the document cannot be
+// read (an encrypted PDF that cannot be decrypted); the reason goes to stderr
+// and nothing is written to stdout.
+int extract_form_fields_fdf(FILE *f, const XRefTable *xref_table);
+int extract_form_fields_xfdf(FILE *f, const XRefTable *xref_table);
 
 // The `fields` command: list every fillable field as JSON (name, type, current
 // value, and per-type extras: a choice field's options and combo/multi-select
 // flags, a checkbox's on-state). Designed for programmatic callers.
-void extract_form_fields_json(FILE *f, const XRefTable *xref_table);
+int extract_form_fields_json(FILE *f, const XRefTable *xref_table);
 
 #endif // FORM_EXTRACTOR_H
