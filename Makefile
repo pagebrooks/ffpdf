@@ -68,9 +68,9 @@ LDFLAGS += $(ARCHFLAGS)
 VERSION := $(shell awk -F'"' '/define PROG_VERSION/{print $$2; exit}' main.c)
 
 TARGET = ffpdf$(EXEEXT)
-SOURCES = main.c utils.c pdf_lex.c pdf_parser.c form_extractor.c field_map.c xfa.c pdf_filler.c crypto.c os_compat.c
+SOURCES = main.c utils.c pdf_lex.c pdf_parser.c form_extractor.c field_map.c xfa.c pdf_filler.c crypto.c font_metrics.c os_compat.c
 OBJECTS = $(SOURCES:.c=.o)
-HEADERS = utils.h pdf_lex.h pdf_parser.h form_extractor.h field_map.h xfa.h pdf_filler.h crypto.h os_compat.h
+HEADERS = utils.h pdf_lex.h pdf_parser.h form_extractor.h field_map.h xfa.h pdf_filler.h crypto.h font_metrics.h os_compat.h
 
 all: $(TARGET)
 
@@ -85,7 +85,7 @@ UNIT_TEST = test_field_map$(EXEEXT)
 # test_field_map.c #includes field_map.c, so link the *other* objects it needs
 # (parse_obj_at_offset, decompress_flate, ...) but NOT field_map.o.
 UNIT_TEST_DEPS = utils.o pdf_lex.o pdf_parser.o form_extractor.o xfa.o crypto.o \
-                 pdf_filler.o os_compat.o   # form_extractor's fields-JSON uses pdf_filler helpers
+                 pdf_filler.o font_metrics.o os_compat.o   # form_extractor's fields-JSON uses pdf_filler helpers
 
 $(UNIT_TEST): test_field_map.c field_map.c $(HEADERS) $(UNIT_TEST_DEPS)
 	$(CC) $(CFLAGS) test_field_map.c $(UNIT_TEST_DEPS) -o $(UNIT_TEST) $(LDFLAGS)

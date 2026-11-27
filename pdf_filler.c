@@ -19,12 +19,14 @@
 #include "xfa.h"              // xfa_datasets_set
 #include "crypto.h"           // pdf_encrypt* (re-encrypt appended objects)
 #include "os_compat.h"        // portable_fopen (UTF-8 paths on Windows)
+#include "font_metrics.h"     // std14_width (comb-field glyph centering)
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 #include <stdarg.h>
+#include <limits.h>
 
 // Filled values may be PHI/PII, so they are never logged by default -- progress
 // output shows the field name and byte length only. Set FFPDF_VERBOSE=1 to
@@ -245,9 +247,10 @@ static void emit_stream_object(Buf *o, const PdfCrypt *crypt, int num, int gen,
  * and point the widget's /AP /N at it.
  *
  * Scope: single-line text fields whose value is representable in WinAnsi (ASCII
- * + Latin-1), left-aligned, using a standard-14 font. Values with characters
- * outside WinAnsi (CJK, emoji) or fields without a usable /Rect are skipped and
- * fall back to /NeedAppearances, which stays set.
+ * + Latin-1), left-aligned (or one glyph per cell for comb fields), using a
+ * standard-14 font. Values with characters outside WinAnsi (CJK, emoji) or
+ * fields without a usable /Rect are skipped and fall back to /NeedAppearances,
+ * which stays set.
  * ========================================================================== */
 
 // Case-insensitive substring search, for classifying full DA font names.
@@ -338,14 +341,52 @@ static int rect_wh(const char *dict, double *w, double *h) {
     return (*w > 1.0 && *h > 1.0);
 }
 
+// Length in bytes of the escaped glyph starting at `p` in a winansi_escape()
+// result: 2 for a backslash escape ("\(", "\)", "\\"), else 1.
+static size_t escaped_glyph_len(const char *p, const char *end) {
+    return (*p == '\\' && p + 1 < end) ? 2 : 1;
+}
+
+// Draw `text` (WinAnsi-escaped) as a comb: the box width is split into `comb`
+// equal cells and glyph i is centered in cell i (ISO 32000-1 12.7.4.3). Glyphs
+// past the last cell are not drawn (MaxLen truncation normally prevents them).
+static void append_comb_text(Buf *cs, const Buf *text, int comb, double w, double ty,
+                             const char *base_font, double fs) {
+    double cell = w / comb;
+    const char *p = (const char *)text->data, *end = p + text->len;
+    for (int i = 0; i < comb && p < end; i++) {
+        size_t gl = escaped_glyph_len(p, end);
+        unsigned char code = (unsigned char)p[gl - 1];
+        double gw = std14_width(base_font, code) * fs / 1000.0;
+        buf_printf(cs, "1 0 0 1 %.2f %.2f Tm\n(", i * cell + (cell - gw) / 2.0, ty);
+        buf_put(cs, p, gl);
+        buf_puts(cs, ") Tj\n");
+        p += gl;
+    }
+}
+
 // Emit a Form XObject (object `ap_obj`) drawing `text` (already WinAnsi-escaped)
 // into a `w` x `h` box using the given DA font/size/color. `da_size` <= 0 means
-// auto-size from the box height. The stream is encrypted when `crypt` is set.
+// auto-size from the box height. `comb` > 0 draws one glyph per cell of a comb
+// field with that many cells; 0 draws a left-aligned run. The stream is
+// encrypted when `crypt` is set.
 static void append_appearance_stream(Buf *out, const PdfCrypt *crypt, int ap_obj,
                                      double w, double h, const char *da_font,
-                                     double da_size, const char *da_color, const Buf *text) {
+                                     double da_size, const char *da_color, const Buf *text,
+                                     int comb) {
+    const char *base_font = base_font_for(da_font);
     double fs = da_size > 0 ? da_size : h - 2.0;   // auto: fill the box height
     if (fs > 12.0 && da_size <= 0) fs = 12.0;      // but cap auto-size
+    if (comb > 0 && da_size <= 0) {                // auto comb: widest glyph fits its cell
+        int maxw = 0;
+        for (const char *p = (const char *)text->data, *end = p + text->len; p < end; ) {
+            size_t gl = escaped_glyph_len(p, end);
+            int gw = std14_width(base_font, (unsigned char)p[gl - 1]);
+            if (gw > maxw) maxw = gw;
+            p += gl;
+        }
+        if (maxw > 0 && fs > (w / comb) * 1000.0 / maxw) fs = (w / comb) * 1000.0 / maxw;
+    }
     if (fs < 4.0) fs = 4.0;
     double ty = (h - fs) / 2.0 + fs * 0.2;         // vertical center + descent
     if (ty < 2.0) ty = 2.0;
@@ -354,17 +395,22 @@ static void append_appearance_stream(Buf *out, const PdfCrypt *crypt, int ap_obj
     buf_puts(&cs, "/Tx BMC\nq\nBT\n");
     buf_printf(&cs, "/%s %.2f Tf\n", da_font, fs);
     buf_printf(&cs, "%s\n", da_color);
-    buf_printf(&cs, "2 %.2f Td\n", ty);
-    buf_put(&cs, "(", 1);
-    buf_put(&cs, text->data, text->len);
-    buf_puts(&cs, ") Tj\nET\nQ\nEMC\n");
+    if (comb > 0) {
+        append_comb_text(&cs, text, comb, w, ty, base_font, fs);
+    } else {
+        buf_printf(&cs, "2 %.2f Td\n", ty);
+        buf_put(&cs, "(", 1);
+        buf_put(&cs, text->data, text->len);
+        buf_puts(&cs, ") Tj\n");
+    }
+    buf_puts(&cs, "ET\nQ\nEMC\n");
 
     char dict[256];
     snprintf(dict, sizeof(dict),
              "/Type/XObject/Subtype/Form/FormType 1/BBox[0 0 %.2f %.2f]"
              "/Resources<</Font<</%s<</Type/Font/Subtype/Type1"
              "/BaseFont/%s/Encoding/WinAnsiEncoding>>>>>>",
-             w, h, da_font, base_font_for(da_font));
+             w, h, da_font, base_font);
     emit_stream_object(out, crypt, ap_obj, 0, dict, (const unsigned char *)cs.data, cs.len);
     free(cs.data);
 }
@@ -461,6 +507,24 @@ static void append_listbox_appearance(Buf *out, const PdfCrypt *crypt, int ap_ob
 static int field_flags(const char *dict) {
     const char *ff = find_key(dict, "/Ff");
     return ff ? atoi(ff) : 0;
+}
+
+// Text-field /Ff bits (ISO 32000-1 Table 228).
+#define FF_TX_MULTILINE   (1 << 12)
+#define FF_TX_PASSWORD    (1 << 13)
+#define FF_TX_FILE_SELECT (1 << 20)
+#define FF_TX_COMB        (1 << 24)
+
+// Number of comb cells for a text field: its /MaxLen when the Comb flag is set
+// and the field is not multiline, password or file-select (Comb is only
+// meaningful with all three clear), else 0 (draw as an ordinary run).
+static int comb_cells(const char *dict) {
+    int ff = field_flags(dict);
+    if (!(ff & FF_TX_COMB) || (ff & (FF_TX_MULTILINE | FF_TX_PASSWORD | FF_TX_FILE_SELECT)))
+        return 0;
+    const char *ml = find_key(dict, "/MaxLen");
+    long maxlen = (ml && isdigit((unsigned char)*ml)) ? strtol(ml, NULL, 10) : 0;
+    return maxlen > INT_MAX ? INT_MAX : (int)maxlen;
 }
 
 // Index of `value` within a choice field's /Opt array, matching either the
@@ -1189,10 +1253,10 @@ static int button_on_state_ref(FILE *f, XRefTable *xref, const char *fodict, con
 }
 
 // Emit the appearance stream for a field being filled, choosing the list-box or
-// single-line variant. `fodict` is the field's dict; the DA is inherited from
-// the AcroForm when the field has none.
+// single-line variant (`comb` > 0: one glyph per comb cell). `fodict` is the
+// field's dict; the DA is inherited from the AcroForm when the field has none.
 static void emit_field_appearance(FillCtx *c, const char *fodict, int ap_obj,
-                                  double aw, double ah, const Buf *aptext,
+                                  double aw, double ah, const Buf *aptext, int comb,
                                   char (*ldisp)[256], int lnopt, const int *lsel, int lnsel, int ltop) {
     char da_font[64], da_color[128], da[256];
     double da_size;
@@ -1205,7 +1269,8 @@ static void emit_field_appearance(FillCtx *c, const char *fodict, int ap_obj,
         append_listbox_appearance(&c->o, c->crypt, ap_obj, aw, ah, da_font, da_size, da_color,
                                   ldisp, lnopt, lsel, lnsel, ltop);
     else
-        append_appearance_stream(&c->o, c->crypt, ap_obj, aw, ah, da_font, da_size, da_color, aptext);
+        append_appearance_stream(&c->o, c->crypt, ap_obj, aw, ah, da_font, da_size, da_color, aptext,
+                                 comb);
     fill_record(c, ap_obj, apoff, 0);
 }
 
@@ -1328,7 +1393,9 @@ static void emit_filled_field(FillCtx *c, FieldMap *map, FdfData *fdf, int i, Fi
                     strlen(value), (loc->ftype == 'C' && choice_idx >= 0) ? " [+/I]" : "",
                     ap_obj ? " [+appearance]" : "");
         if (ap_obj > 0)
-            emit_field_appearance(c, fodict, ap_obj, aw, ah, &aptext, ldisp, lnopt, lsel, lnsel, ltop);
+            emit_field_appearance(c, fodict, ap_obj, aw, ah, &aptext,
+                                  loc->ftype == 'T' ? comb_cells(fodict) : 0,
+                                  ldisp, lnopt, lsel, lnsel, ltop);
 
         // When flattening, remember the appearance to bake into page content.
         if (c->flatten) {

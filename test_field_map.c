@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include "field_map.c"
 #include "xfa.h"          // xfa_datasets_set (linked from xfa.o)
+#include "font_metrics.h" // std14_width (linked from font_metrics.o)
 
 static int g_checks = 0, g_fails = 0;
 
@@ -372,6 +373,23 @@ static void test_lzw(void) {
     free(d);
 }
 
+// Spot-check the standard-14 width tables against the Adobe AFM values.
+static void test_std14_width(void) {
+    CHECK(std14_width("Helvetica", '1') == 556);
+    CHECK(std14_width("Helvetica", 'A') == 667);
+    CHECK(std14_width("Helvetica", ' ') == 278);
+    CHECK(std14_width("Helvetica", 0xE9) == 556);          // eacute
+    CHECK(std14_width("Helvetica-Oblique", 'W') == 944);   // shares upright metrics
+    CHECK(std14_width("Helvetica-Bold", 'i') == 278);
+    CHECK(std14_width("Helvetica-BoldOblique", 'm') == 889);
+    CHECK(std14_width("Times-Roman", 'W') == 944);
+    CHECK(std14_width("Times-Bold", 'A') == 722);
+    CHECK(std14_width("Times-Italic", 'm') == 722);
+    CHECK(std14_width("Courier", 'W') == 600 && std14_width("Courier-Bold", 'i') == 600);
+    CHECK(std14_width("NoSuchFont", 'A') == 667);           // Helvetica fallback
+    CHECK(std14_width("Helvetica", '\n') == 0);            // control code
+}
+
 int main(void) {
     test_find_key();
     test_crypto();
@@ -387,6 +405,7 @@ int main(void) {
     test_skip_value();
     test_field_array_text_inline();
     test_xfa_datasets_set();
+    test_std14_width();
 
     printf("%d checks, %d failures\n", g_checks, g_fails);
     return g_fails ? 1 : 0;
