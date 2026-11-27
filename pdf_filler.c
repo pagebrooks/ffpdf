@@ -1526,8 +1526,9 @@ static void sync_xfa_datasets(FillCtx *c, FdfData *fdf, FieldMap *map) {
 /* ==========================================================================
  * Flattening (-flatten): bake filled appearances into page content and remove
  * the interactive form (widgets, AcroForm, XFA) so the result is not editable.
- * Scope: the common case -- field==widget forms with an inline page /Resources
- * and a single or array /Contents. Runs after the normal fill has generated the
+ * Each page's /Contents (a stream or an array, inline or indirect), /Resources
+ * (inline, indirect or inherited) and /Annots (inline or indirect) are resolved
+ * and rewritten inline. Runs after the normal fill has generated the
  * appearance XObjects and recorded a Stamp per filled field.
  * ========================================================================== */
 
@@ -1616,22 +1617,61 @@ static void collect_pages(FILE *f, XRefTable *xref, int node, int *out, int *n, 
     free(d);
 }
 
+// Inner text of a dictionary value at `v`: an inline "<<...>>" or an indirect
+// reference to a dictionary object. malloc'd; NULL if `v` is neither.
+static char *dict_value_inner(FILE *f, XRefTable *xref, const char *v) {
+    if (!v) return NULL;
+    if (v[0] == '<' && v[1] == '<') return extract_dict_inner_alloc(v);
+    if (!is_indirect_ref(v)) return NULL;
+    char *d = get_object_raw(f, xref, atoi(v), NULL);
+    char *in = d ? extract_dict_inner_alloc(d) : NULL;
+    free(d);
+    return in;
+}
+
+// Inner text of the resource dictionary a page uses: its own /Resources
+// (inline or indirect), or else the nearest one inherited from a /Pages
+// ancestor (ISO 32000-1 7.7.3.4). malloc'd; NULL when there is none.
+static char *page_resources_inner(FILE *f, XRefTable *xref, const char *page) {
+    const char *rv = find_key(page, "/Resources");
+    if (rv) return dict_value_inner(f, xref, rv);
+    const char *pv = find_key(page, "/Parent");
+    int node = (pv && is_indirect_ref(pv)) ? atoi(pv) : 0;
+    for (int depth = 0; node > 0 && depth < 100; depth++) {
+        char *d = get_object_raw(f, xref, node, NULL);
+        if (!d) return NULL;
+        rv = find_key(d, "/Resources");
+        char *res = rv ? dict_value_inner(f, xref, rv) : NULL;
+        pv = find_key(d, "/Parent");
+        node = (!rv && pv && is_indirect_ref(pv)) ? atoi(pv) : 0;
+        free(d);
+        if (rv) return res;
+    }
+    return NULL;
+}
+
 // Rebuild a page's inner dict: append the stamp content stream to /Contents,
 // register the stamp XObjects in /Resources /XObject, and drop the flattened
 // widget refs from /Annots. `cs_obj` <= 0 => only strip /Annots. Returns malloc'd.
-static char *rewrite_page_dict(const char *pd, int cs_obj, const char *xobj_entries,
-                               int had_annots, const int *kept, int nkept) {
+static char *rewrite_page_dict(FILE *f, XRefTable *xref, const char *pd, int cs_obj,
+                               const char *xobj_entries, int had_annots,
+                               const int *kept, int nkept) {
     char *inner = extract_dict_inner_alloc(pd);
     if (!inner) return NULL;
 
     Buf nc = {0}, nr = {0};
     if (cs_obj > 0) {
+        // /Contents is a stream or an array of streams, and either may be an
+        // indirect reference. The new value must be one flat array of streams:
+        // viewers reject an array nested inside it and draw the page blank.
         const char *cv = find_key(inner, "/Contents");
-        if (cv && *cv == '[') {
-            const char *end = skip_value(cv);
-            buf_put(&nc, cv, (size_t)((end - 1) - cv));
+        char *carr = cv ? field_array_text(f, xref, inner, "/Contents") : NULL;
+        size_t clen = carr ? strlen(carr) : 0;
+        if (clen && carr[clen - 1] != ']') { free(carr); carr = NULL; clen = 0; }  // unterminated
+        if (carr) {                                   // inline or indirect array
+            buf_put(&nc, carr, clen - 1);             // all but the closing ']'
             buf_printf(&nc, " %d 0 R]", cs_obj);
-        } else if (cv) {
+        } else if (cv) {                              // a stream (reference)
             const char *end = skip_value(cv);
             buf_puts(&nc, "[");
             buf_put(&nc, cv, (size_t)(end - cv));
@@ -1639,23 +1679,18 @@ static char *rewrite_page_dict(const char *pd, int cs_obj, const char *xobj_entr
         } else {
             buf_printf(&nc, "[%d 0 R]", cs_obj);
         }
-        const char *rv = find_key(inner, "/Resources");
-        if (rv && *rv == '<') {
-            char *rin = extract_dict_inner_alloc(rv);
-            const char *xo = rin ? find_key(rin, "/XObject") : NULL;
-            if (xo && *xo == '<') {
-                char *xin = extract_dict_inner_alloc(xo);
-                char *rcopy = rin ? strdup(rin) : NULL;
-                if (rcopy) remove_entry(rcopy, "/XObject");
-                buf_printf(&nr, "<<%s/XObject<<%s%s>>>>", rcopy ? rcopy : "", xin ? xin : "", xobj_entries);
-                free(rcopy); free(xin);
-            } else {
-                buf_printf(&nr, "<<%s/XObject<<%s>>>>", rin ? rin : "", xobj_entries);
-            }
-            free(rin);
-        } else {
-            buf_printf(&nr, "<</XObject<<%s>>>>", xobj_entries);
-        }
+        free(carr);
+
+        // The page gets its own inline /Resources: a copy of the dictionary it
+        // used before (its own, possibly indirect, or an inherited one, so the
+        // original content keeps its fonts), plus the stamp XObjects. A shared
+        // indirect resource dictionary is copied, never modified.
+        char *rin = page_resources_inner(f, xref, inner);
+        const char *xo = rin ? find_key(rin, "/XObject") : NULL;
+        char *xin = xo ? dict_value_inner(f, xref, xo) : NULL;
+        if (rin) remove_entry(rin, "/XObject");
+        buf_printf(&nr, "<<%s/XObject<<%s%s>>>>", rin ? rin : "", xin ? xin : "", xobj_entries);
+        free(rin); free(xin);
     }
 
     char *base = strdup(inner);
@@ -1685,15 +1720,8 @@ static void flatten_page(FillCtx *c, int page_obj) {
     if (!pd) return;
 
     // /Annots may be an inline array or an indirect reference to one.
-    const char *av = find_key(pd, "/Annots");
-    int had_annots = (av != NULL);
-    char *annots_obj = NULL;
-    const char *arr = NULL;
-    if (av && *av == '[') arr = av;
-    else if (av && isdigit((unsigned char)*av)) {
-        annots_obj = get_object_raw(c->f, c->xref, atoi(av), NULL);
-        arr = annots_obj ? strchr(annots_obj, '[') : NULL;
-    }
+    int had_annots = (find_key(pd, "/Annots") != NULL);
+    char *arr = had_annots ? field_array_text(c->f, c->xref, pd, "/Annots") : NULL;
     int all[8192], nall = 0;
     if (arr) parse_ref_array(arr, all, &nall, 8192);
 
@@ -1728,7 +1756,7 @@ static void flatten_page(FillCtx *c, int page_obj) {
             drawn++;
         }
     }
-    free(annots_obj);
+    free(arr);
 
     // Nothing to change on this page (no stamps, no widgets to strip).
     if (drawn == 0 && !had_widget) { free(content.data); free(xobj.data); free(pd); return; }
@@ -1740,7 +1768,7 @@ static void flatten_page(FillCtx *c, int page_obj) {
         emit_stream_object(&c->o, c->crypt, cs_obj, 0, "", content.data, content.len);
         fill_record(c, cs_obj, csoff, 0);
     }
-    char *newpage = rewrite_page_dict(pd, cs_obj, xobj.data ? (char *)xobj.data : "",
+    char *newpage = rewrite_page_dict(c->f, c->xref, pd, cs_obj, xobj.data ? (char *)xobj.data : "",
                                       had_annots, kept, nkept);
     if (newpage) {
         long off = c->base_len + (long)c->o.len;

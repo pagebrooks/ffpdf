@@ -555,6 +555,90 @@ $BIN fill -o "$TMP/af_never.pdf" "$TMP/af_dangling.pdf" "$TMP/afin_v.json" 2>"$T
 [ "$ec" -eq 1 ] && grep -q "refers to object 99" "$TMP/af_err" && [ ! -e "$TMP/af_never.pdf" ] \
     && pass "/AcroForm dangling: fill exits 1 with the reason" || fail "/AcroForm dangling: fill exit $ec"
 
+echo "== fill --flatten: indirect and inherited page entries =="
+# A page's /Contents may be an indirect reference to an array of streams,
+# /Resources may be indirect (with an indirect /XObject) or inherited from the
+# page tree, and /Annots may be indirect. Flatten must resolve each one: a
+# nested /Contents array blanks the page (#20), and dropping the page's own
+# resources loses the fonts its original content uses.
+mkpg() { # $1=out $2=page entries $3=extra /Pages entries
+python3 - "$1" "$2" "$3" <<'PY'
+import sys
+page, pages_extra = sys.argv[2].encode(), sys.argv[3].encode()
+def stream(d, extra=b""):
+    return b"<</Length %d%s>>stream\n" % (len(d), extra) + d + b"\nendstream"
+objs = {
+ 1: b"<</Type/Catalog/Pages 2 0 R/AcroForm 7 0 R>>",
+ 2: b"<</Type/Pages/Kids[3 0 R]/Count 1" + pages_extra + b">>",
+ 3: b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 200]" + page + b">>",
+ 4: stream(b"30203020726720313020313530203130302033302072652066>", b"/Filter[/ASCIIHexDecode]"),
+ 5: stream(b"BT /Helv 14 Tf 10 120 Td (static) Tj ET /Logo Do"),
+ 6: b"<</FT/Tx/T(name)/Type/Annot/Subtype/Widget/Rect[10 60 200 90]/P 3 0 R>>",
+ 7: b"<</Fields[6 0 R]/DA(/Helv 12 Tf 0 g)/DR<</Font<</Helv 8 0 R>>>>>>",
+ 8: b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica/Name/Helv>>",
+ 9: b"[4 0 R 5 0 R]",
+ 10: b"<</Font<</Helv 8 0 R>>/XObject 12 0 R>>",
+ 11: b"[6 0 R]",
+ 12: b"<</Logo 13 0 R>>",
+ 13: stream(b"0 1 0 rg 200 150 20 20 re f", b"/Type/XObject/Subtype/Form/BBox[0 0 300 200]"),
+}
+o = bytearray(b"%PDF-1.7\n"); off = {}
+for n in sorted(objs):
+    off[n] = len(o); o += b"%d 0 obj\n" % n + objs[n] + b"\nendobj\n"
+x = len(o); size = max(objs) + 1
+o += b"xref\n0 %d\n0000000000 65535 f \n" % size
+o += b"".join(b"%010d 00000 n \n" % off[n] for n in range(1, size))
+o += b"trailer\n<</Size %d/Root 1 0 R>>\nstartxref\n%d\n%%%%EOF\n" % (size, x)
+open(sys.argv[1], "wb").write(o)
+PY
+}
+# pgcheck <case> <flattened pdf>: asserts on the newest page object 3.
+pgcheck() {
+python3 - "$1" "$2" <<'PY'
+import sys, re
+case, d = sys.argv[1], open(sys.argv[2], "rb").read()
+pg = re.findall(rb"\n3 0 obj\n(<<.*?>>)\nendobj", d, re.S)[-1]
+m = re.search(rb"/Contents\s*\[([^\]]*)\]", pg)
+assert m, pg
+refs = re.findall(rb"(\d+) 0 R", m.group(1))
+assert b"[" not in m.group(1), pg                          # one flat array
+stamp = refs[-1]
+want = {b"ci": [b"4", b"5"], b"cs": [b"4"]}.get(case.encode(), [b"4", b"5"])
+assert refs[:-1] == want and stamp not in (b"4", b"5", b"9"), (refs, pg)
+assert b"/Font<</Helv 8 0 R>>" in pg, pg                   # original fonts kept
+assert re.search(rb"/XObject<<[^>]*/Fl0 \d+ 0 R", pg), pg  # stamp registered
+if case in ("ci", "ri", "rh"):              # existing XObjects merged
+    assert b"/Logo 13 0 R" in pg and b"/XObject 12 0 R" not in pg, pg
+assert not re.search(rb"/Annots\s*\[\s*6 0 R", pg) and b"/Annots 11 0 R" not in pg, pg
+PY
+}
+printf '{"name":"Jane Roe"}' > "$TMP/pg_v.json"
+for c in "ci|/Contents 9 0 R/Resources<</Font<</Helv 8 0 R>>/XObject<</Logo 13 0 R>>>>/Annots[6 0 R]|" \
+         "cs|/Contents 4 0 R/Resources<</Font<</Helv 8 0 R>>>>/Annots[6 0 R]|" \
+         "ri|/Contents[4 0 R 5 0 R]/Resources 10 0 R/Annots[6 0 R]|" \
+         "rh|/Contents[4 0 R 5 0 R]/Annots[6 0 R]|/Resources<</Font<</Helv 8 0 R>>/XObject<</Logo 13 0 R>>>>" \
+         "ai|/Contents[4 0 R 5 0 R]/Resources<</Font<</Helv 8 0 R>>>>/Annots 11 0 R|"; do
+    IFS='|' read -r label entries pextra <<< "$c"
+    mkpg "$TMP/pg_$label.pdf" "$entries" "$pextra"
+    $BIN fill --flatten --strict -o "$TMP/pg_${label}_f.pdf" "$TMP/pg_$label.pdf" "$TMP/pg_v.json" 2>/dev/null; ec=$?
+    [ "$ec" -eq 0 ] && pgcheck "$label" "$TMP/pg_${label}_f.pdf" \
+        && pass "flatten $label: flat /Contents, original resources kept, widget removed" \
+        || fail "flatten $label: page rewritten wrong (exit $ec)"
+done
+if python3 -c 'import pikepdf' 2>/dev/null; then
+    python3 - "$TMP"/pg_*_f.pdf <<'PY' && pass "flatten: every /Contents element is a stream (pikepdf)" || fail "flatten: /Contents holds a non-stream"
+import sys, pikepdf
+for path in sys.argv[1:]:
+    with pikepdf.open(path) as p:
+        pg = p.pages[0].obj
+        for el in pg.Contents:
+            assert isinstance(el, pikepdf.Stream), (path, repr(el))
+        assert "/Helv" in pg.Resources.Font, path
+        assert len(pg.get("/Annots", [])) == 0, path
+        assert "/AcroForm" not in p.Root, path
+PY
+fi
+
 echo "== field names, labels and options decoded as PDF text strings =="
 # /T, /TU and /Opt are text strings: literal escapes (\220 = PDFDocEncoding 0x90
 # = U+2019), raw PDFDocEncoding bytes, and UTF-16BE (BMP + surrogate pair) must

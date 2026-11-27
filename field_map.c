@@ -250,7 +250,9 @@ char *get_object_raw(FILE *f, XRefTable *xref, int obj_num, int *gen_out) {
 }
 
 // Read the raw "[...]" text of an indirect array object (e.g. object 5 in
-// "/Fields 5 0 R"). Returns malloc'd text or NULL.
+// "/Fields 5 0 R"). Returns malloc'd text, or NULL if the object's value is not
+// an array (searching ahead for '[' would find one inside a dictionary, such as
+// a stream's /Filter [...], or in the next object).
 static char *read_array_object(FILE *f, XRefTable *xref, int num) {
     long off = xref_lookup(xref, num);
     if (off >= 0) {
@@ -258,8 +260,8 @@ static char *read_array_object(FILE *f, XRefTable *xref, int num) {
         char *buf = read_object_bytes(f, off, &got);
         if (!buf) return NULL;
 
-        const char *kw = strstr(buf, "obj");          // past "N G obj"
-        const char *lb = kw ? strchr(kw, '[') : NULL;
+        const char *lb = object_value_start(buf);     // past "N G obj"
+        if (lb && *lb != '[') lb = NULL;
         char *out = NULL;
         if (lb) {
             const char *e = skip_value(lb);           // just past matching ']'
@@ -274,7 +276,11 @@ static char *read_array_object(FILE *f, XRefTable *xref, int num) {
     // Compressed object: extract its array from the lazily resolved text.
     char *full = get_compressed_object(f, xref, num);
     char *out = NULL;
-    const char *lb = full ? strchr(full, '[') : NULL;
+    const char *lb = full;
+    if (lb) {
+        while (*lb == ' ' || *lb == '\r' || *lb == '\n' || *lb == '\t' || *lb == '\f') lb++;
+        if (*lb != '[') lb = NULL;
+    }
     if (lb) {
         const char *e = skip_value(lb);
         size_t len = (size_t)(e - lb);
@@ -453,21 +459,6 @@ static void walk_fields(WalkCtx *ctx, int obj_num, const char *parent_qname,
 /* ==========================================================================
  * Locating the AcroForm and building the map.
  * ========================================================================== */
-// Does `v` start with an indirect reference "N G R" (R followed by a delimiter)?
-static int is_indirect_ref(const char *v) {
-    const char *p = v;
-    if (!isdigit((unsigned char)*p)) return 0;
-    while (isdigit((unsigned char)*p)) p++;
-    if (!isspace((unsigned char)*p)) return 0;
-    while (isspace((unsigned char)*p)) p++;
-    if (!isdigit((unsigned char)*p)) return 0;
-    while (isdigit((unsigned char)*p)) p++;
-    if (!isspace((unsigned char)*p)) return 0;
-    while (isspace((unsigned char)*p)) p++;
-    return *p == 'R' && (p[1] == '\0' || isspace((unsigned char)p[1]) ||
-                         strchr("/<>[]()%", p[1]) != NULL);
-}
-
 int acroform_resolve(FILE *f, XRefTable *xref, int root_obj,
                      char **dict, int *obj_num, int *gen) {
     *dict = NULL;

@@ -120,4 +120,7 @@ int parse_ref_num(const char *p);
 // Parse an indirect reference "N G R" at `p` into *num and *gen.
 void parse_indirect_ref(const char *p, int *num, int *gen);
 
+// Does `v` start with an indirect reference "N G R" (R followed by a delimiter)?
+int is_indirect_ref(const char *v);
+
 #endif // PDF_LEX_H

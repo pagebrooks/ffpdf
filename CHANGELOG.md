@@ -29,6 +29,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `fill --flatten` no longer blanks a page whose `/Contents` is an indirect
+  reference to an array of streams (`/Contents 12 0 R` with object 12
+  `[6 0 R 7 0 R]`). The array was nested inside the new `/Contents` array,
+  which viewers reject, so the whole page rendered blank, original content
+  included. Its streams are now spliced into one flat array (#20).
+- `fill --flatten` keeps a page's original resources when its `/Resources` is
+  an indirect reference or is inherited from the page tree. The rewritten page
+  used to get a resource dictionary holding only the stamped fields, so the
+  original page content lost its fonts and images. An indirect `/XObject`
+  dictionary inside the resources is merged the same way.
+- `fill --flatten` flattens the widgets of a page whose `/Annots` is an
+  indirect reference to an array stored outside an object stream. Those
+  widgets were left on the page as live annotations after the form was
+  removed.
 - PDF text strings are decoded per ISO 32000-1: literal escapes (octal such
   as `\220`, `\n`, line continuations, balanced parentheses), PDFDocEncoding
   bytes (0x90 is `’`, not an invalid UTF-8 byte), UTF-16BE including
