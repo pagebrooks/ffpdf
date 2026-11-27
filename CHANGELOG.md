@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Field names may change for forms with non-ASCII names.** Field names
+  (`/T`), labels (`/TU`), values and choice options are now decoded as PDF
+  text strings into UTF-8 (#22). A name such as `(payee\220s name)` is now
+  reported and filled as `payee’s name`; it used to come out as
+  `payee220s name`, and that spelling no longer matches. UTF-16 names that
+  used to show `?` for each non-ASCII character (`Ca?f? ?`) now keep the real
+  characters (`Café 中`). Run `fields` again to get the current names. Plain
+  ASCII names are unchanged.
+
 - The Windows release binary is now built in MSYS2's UCRT64 environment
   instead of MINGW64, so `ffpdf.exe` links the Universal C Runtime
   (`ucrtbase.dll`) instead of the legacy `msvcrt.dll`. The UCRT ships with
@@ -20,6 +29,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- PDF text strings are decoded per ISO 32000-1: literal escapes (octal such
+  as `\220`, `\n`, line continuations, balanced parentheses), PDFDocEncoding
+  bytes (0x90 is `’`, not an invalid UTF-8 byte), UTF-16BE including
+  surrogate pairs, and UTF-8 with a byte order mark. `fields` no longer emits
+  invalid UTF-8 JSON for forms with raw PDFDocEncoding labels, such as the
+  California SCGR-1 (#22). Hand-written FDF files may still use raw UTF-8.
+- `fdf-extract` writes non-ASCII field names as UTF-16BE hex strings, so they
+  feed back into `fill`, and FDF values written as hex strings (`<FEFF...>`)
+  are now read instead of being treated as empty. `xfdf-extract` now exports
+  hex-string values too.
+- `fields` lists every option of a choice field. Options with characters
+  outside WinAnsi used to make it omit the whole list.
+- Values and options containing typographic punctuation (`’ “ ” – — € …`)
+  now get a generated appearance stream instead of relying on the viewer.
 - An `/AcroForm` written as a direct dictionary in the catalog
   (`/AcroForm << /Fields [...] >>`, which pikepdf produces by default) is now
   read like the usual indirect reference. Before, `fields` reported

@@ -72,8 +72,8 @@ FdfData *parse_values(const char *path);
 
 // Field-introspection helpers shared with the `fields` command (JSON listing).
 // field_choice_options fills disp[] with a choice field's option display texts
-// (the strings fill's /Opt matching accepts); returns the count, 0 when /Opt is
-// absent, or -1 when an option is not WinAnsi-representable.
+// as UTF-8 (the strings fill's /Opt matching accepts); returns the count, or 0
+// when /Opt is absent.
 // field_checkbox_on_state finds a checkbox widget's non-/Off appearance-state
 // name; returns 1 and fills `out` when found.
 int field_choice_options(FILE *f, XRefTable *xref, const char *dict,

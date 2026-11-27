@@ -249,6 +249,206 @@ const char *pdf_literal_bytes(const char *p, unsigned char *out, size_t cap, siz
     return p;
 }
 
+/* ==========================================================================
+ * PDF text strings -> UTF-8.
+ * ========================================================================== */
+
+unsigned utf8_next(const unsigned char **s) {
+    const unsigned char *p = *s;
+    unsigned c = p[0], cp;
+    int n;                                        // continuation bytes expected
+    if (c < 0x80)                { *s = p + 1; return c; }
+    else if ((c & 0xE0) == 0xC0) { n = 1; cp = c & 0x1F; }
+    else if ((c & 0xF0) == 0xE0) { n = 2; cp = c & 0x0F; }
+    else if ((c & 0xF8) == 0xF0) { n = 3; cp = c & 0x07; }
+    else                         { *s = p + 1; return c; }   // stray continuation
+    for (int i = 1; i <= n; i++) {
+        if ((p[i] & 0xC0) != 0x80) { *s = p + 1; return c; }  // truncated sequence
+        cp = (cp << 6) | (p[i] & 0x3F);
+    }
+    *s = p + n + 1;
+    return cp;
+}
+
+// PDFDocEncoding (ISO 32000-1 Annex D) agrees with Latin-1 except for these
+// bytes: 0x18..0x1F, and 0x7F..0xA0 (offset 8 onward), plus 0xAD. 0 marks a
+// byte the encoding leaves undefined.
+static const unsigned short PDFDOC_18[8] = {
+    0x02D8, 0x02C7, 0x02C6, 0x02D9, 0x02DD, 0x02DB, 0x02DA, 0x02DC,
+};
+static const unsigned short PDFDOC_7F[34] = {
+    0,                                                        /* 0x7F */
+    0x2022, 0x2020, 0x2021, 0x2026, 0x2014, 0x2013, 0x0192, 0x2044,  /* 0x80 */
+    0x2039, 0x203A, 0x2212, 0x2030, 0x201E, 0x201C, 0x201D, 0x2018,  /* 0x88 */
+    0x2019, 0x201A, 0x2122, 0xFB01, 0xFB02, 0x0141, 0x0152, 0x0160,  /* 0x90 */
+    0x0178, 0x017D, 0x0131, 0x0142, 0x0153, 0x0161, 0x017E, 0,       /* 0x98 */
+    0x20AC,                                                   /* 0xA0 */
+};
+
+static unsigned pdfdoc_to_unicode(unsigned char b) {
+    unsigned u = b;
+    if (b >= 0x18 && b <= 0x1F) u = PDFDOC_18[b - 0x18];
+    else if (b >= 0x7F && b <= 0xA0) u = PDFDOC_7F[b - 0x7F];
+    else if (b == 0xAD) u = 0;
+    return u ? u : 0xFFFD;
+}
+
+// Append code point `cp` as UTF-8 if it fits (leaving room for the NUL).
+static int put_cp(char *out, size_t cap, size_t *k, unsigned cp) {
+    unsigned char e[4];
+    size_t n;
+    if (cp == 0) return 1;                                    // dropped
+    if (cp >= 0xD800 && cp <= 0xDFFF) cp = 0xFFFD;            // lone surrogate
+    if (cp < 0x80)         { e[0] = (unsigned char)cp; n = 1; }
+    else if (cp < 0x800)   { e[0] = (unsigned char)(0xC0 | (cp >> 6));
+                             e[1] = (unsigned char)(0x80 | (cp & 0x3F)); n = 2; }
+    else if (cp < 0x10000) { e[0] = (unsigned char)(0xE0 | (cp >> 12));
+                             e[1] = (unsigned char)(0x80 | ((cp >> 6) & 0x3F));
+                             e[2] = (unsigned char)(0x80 | (cp & 0x3F)); n = 3; }
+    else                   { e[0] = (unsigned char)(0xF0 | (cp >> 18));
+                             e[1] = (unsigned char)(0x80 | ((cp >> 12) & 0x3F));
+                             e[2] = (unsigned char)(0x80 | ((cp >> 6) & 0x3F));
+                             e[3] = (unsigned char)(0x80 | (cp & 0x3F)); n = 4; }
+    if (*k + n >= cap) return 0;                              // full: stop here
+    memcpy(out + *k, e, n);
+    *k += n;
+    return 1;
+}
+
+// Are bytes `b` valid UTF-8 containing at least one multi-byte sequence?
+static int utf8_with_non_ascii(const unsigned char *b, size_t n) {
+    int multi = 0;
+    for (size_t i = 0; i < n; ) {
+        unsigned c = b[i];
+        size_t len = c < 0x80 ? 1 : (c & 0xE0) == 0xC0 ? 2 : (c & 0xF0) == 0xE0 ? 3
+                   : (c & 0xF8) == 0xF0 ? 4 : 0;
+        if (!len || i + len > n || (len == 2 && c < 0xC2)) return 0;   // bad lead/overlong
+        for (size_t j = 1; j < len; j++)
+            if ((b[i + j] & 0xC0) != 0x80) return 0;
+        if (len > 1) multi = 1;
+        i += len;
+    }
+    return multi;
+}
+
+// Decode UTF-8 bytes (no BOM) into `out`, replacing malformed bytes with U+FFFD.
+static size_t utf8_bytes_copy(const unsigned char *b, size_t n, char *out, size_t cap) {
+    size_t k = 0;
+    for (size_t i = 0; i < n; ) {
+        // utf8_next needs a NUL-terminated view; copy one sequence at a time.
+        unsigned char seq[5] = {0};
+        size_t sl = n - i < 4 ? n - i : 4;
+        memcpy(seq, b + i, sl);
+        const unsigned char *q = seq;
+        unsigned cp = utf8_next(&q);
+        size_t used = (size_t)(q - seq);
+        if (cp >= 0x80 && used == 1) cp = 0xFFFD;             // malformed byte
+        i += used ? used : 1;
+        if (!put_cp(out, cap, &k, cp)) break;
+    }
+    out[k] = '\0';
+    return k;
+}
+
+size_t pdf_text_bytes_utf8(const unsigned char *b, size_t n, char *out, size_t cap) {
+    size_t k = 0;
+    if (n >= 2 && b[0] == 0xFE && b[1] == 0xFF) {             // UTF-16BE
+        for (size_t i = 2; i + 1 < n; i += 2) {
+            unsigned cp = ((unsigned)b[i] << 8) | b[i + 1];
+            if (cp >= 0xD800 && cp <= 0xDBFF && i + 3 < n) {  // surrogate pair
+                unsigned lo = ((unsigned)b[i + 2] << 8) | b[i + 3];
+                if (lo >= 0xDC00 && lo <= 0xDFFF) {
+                    cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                    i += 2;
+                }
+            }
+            if (!put_cp(out, cap, &k, cp)) break;
+        }
+    } else if (n >= 3 && b[0] == 0xEF && b[1] == 0xBB && b[2] == 0xBF) {   // UTF-8
+        return utf8_bytes_copy(b + 3, n - 3, out, cap);
+    } else {                                                  // PDFDocEncoding
+        for (size_t i = 0; i < n; i++)
+            if (!put_cp(out, cap, &k, pdfdoc_to_unicode(b[i]))) break;
+    }
+    out[k] = '\0';
+    return k;
+}
+
+// Raw bytes of the string at `v` (literal or hex) into a malloc'd buffer.
+// Returns NULL if `v` is not a string; sets *n and *end (past the string).
+static unsigned char *string_bytes(const char *v, size_t *n, const char **end) {
+    *n = 0;
+    if (*v == '(') {
+        size_t raw = (size_t)(skip_value(v) - v);
+        unsigned char *b = malloc(raw + 1);
+        if (!b) return NULL;
+        *end = pdf_literal_bytes(v, b, raw, n);
+        return b;
+    }
+    if (*v == '<' && v[1] != '<') {
+        const char *p = v + 1;
+        const char *close = strchr(p, '>');
+        size_t raw = close ? (size_t)(close - p) : strlen(p);
+        unsigned char *b = malloc(raw / 2 + 2);
+        if (!b) return NULL;
+        int hi = -1;
+        for (; *p && *p != '>'; p++) {
+            int d;
+            if (*p >= '0' && *p <= '9') d = *p - '0';
+            else if (*p >= 'a' && *p <= 'f') d = *p - 'a' + 10;
+            else if (*p >= 'A' && *p <= 'F') d = *p - 'A' + 10;
+            else continue;                                    // whitespace
+            if (hi < 0) { hi = d; continue; }
+            b[(*n)++] = (unsigned char)(hi * 16 + d);
+            hi = -1;
+        }
+        if (hi >= 0) b[(*n)++] = (unsigned char)(hi * 16);    // odd digit pads with 0
+        *end = *p == '>' ? p + 1 : p;
+        return b;
+    }
+    return NULL;
+}
+
+// Decode bytes as a text string; `input` enables the raw-UTF-8 allowance.
+static size_t text_utf8(const unsigned char *b, size_t n, char *out, size_t cap, int input) {
+    int bom = n >= 2 && ((b[0] == 0xFE && b[1] == 0xFF) ||
+                         (n >= 3 && b[0] == 0xEF && b[1] == 0xBB && b[2] == 0xBF));
+    if (input && !bom && utf8_with_non_ascii(b, n)) return utf8_bytes_copy(b, n, out, cap);
+    return pdf_text_bytes_utf8(b, n, out, cap);
+}
+
+static const char *text_fixed(const char *v, char *out, size_t cap, int input) {
+    out[0] = '\0';
+    size_t n;
+    const char *end = v;
+    unsigned char *b = string_bytes(v, &n, &end);
+    if (!b) return NULL;
+    text_utf8(b, n, out, cap, input);
+    free(b);
+    return end;
+}
+
+static char *text_alloc(const char *v, int input) {
+    size_t n;
+    const char *end;
+    unsigned char *b = string_bytes(v, &n, &end);
+    if (!b) return NULL;
+    size_t cap = 3 * n + 1;
+    char *out = malloc(cap);
+    if (out) {
+        size_t k = text_utf8(b, n, out, cap, input);
+        char *shrunk = realloc(out, k + 1);
+        if (shrunk) out = shrunk;
+    }
+    free(b);
+    return out;
+}
+
+const char *pdf_text(const char *v, char *out, size_t cap) { return text_fixed(v, out, cap, 0); }
+char *pdf_text_alloc(const char *v) { return text_alloc(v, 0); }
+const char *pdf_text_input(const char *v, char *out, size_t cap) { return text_fixed(v, out, cap, 1); }
+char *pdf_text_input_alloc(const char *v) { return text_alloc(v, 1); }
+
 char *extract_dict_inner_alloc(const char *obj_dict) {
     const char *open = strstr(obj_dict, "<<");
     if (!open) return NULL;

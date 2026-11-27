@@ -330,64 +330,16 @@ static char field_type_from_dict(const char *dict, char inherited) {
     return inherited;
 }
 
-static int hexval(int c) {
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-    return -1;
-}
-
-// Read the partial field name (/T) into `out`. Handles both literal strings
-// "(name)" and hex strings, either PDFDocEncoding "<4E616D65>" or UTF-16BE with
-// a BOM "<FEFF..>" (as produced by LiveCycle). Returns 1 if a name is present.
+// Read the partial field name (/T) into `out` as UTF-8. /T is a text string:
+// a literal "(name)" or hex "<...>" string holding UTF-16BE (FE FF BOM, as
+// LiveCycle writes), UTF-8 (EF BB BF) or PDFDocEncoding bytes. Decrypted
+// strings from encrypted documents arrive as hex, so both forms must decode
+// identically. Returns 1 if a name is present.
 static int read_partial_name(const char *dict, char *out, size_t out_size) {
+    out[0] = '\0';
     const char *t = find_key(dict, "/T");
-    if (!t) return 0;
-    size_t k = 0;
-
-    if (*t == '(') {
-        t++;
-        while (*t && *t != ')' && k < out_size - 1) {
-            if (*t == '\\' && t[1]) { t++; }   // unescape
-            out[k++] = *t++;
-        }
-        out[k] = '\0';
-        return 1;
-    }
-
-    if (*t == '<') {                            // hex string
-        // Decode to bytes, then interpret them like a literal string's bytes:
-        // UTF-16BE only when they begin with the FE FF BOM, otherwise
-        // PDFDocEncoding copied verbatim. Encrypted documents depend on this:
-        // pdf_decrypt_dict_strings re-emits every decrypted string as hex, so a
-        // plain "(FullName)" arrives here as "<46756c6c4e616d65>".
-        unsigned char bytes[512];
-        size_t nb = 0;
-        int hi = -1;
-        for (t++; *t && *t != '>' && nb < sizeof(bytes); t++) {
-            int v = hexval((unsigned char)*t);
-            if (v < 0) continue;                // whitespace between digits
-            if (hi < 0) { hi = v; continue; }
-            bytes[nb++] = (unsigned char)(hi * 16 + v);
-            hi = -1;
-        }
-        if (hi >= 0 && nb < sizeof(bytes)) bytes[nb++] = (unsigned char)(hi * 16);  // odd digit
-        if (nb >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF) {
-            for (size_t i = 2; i + 1 < nb && k < out_size - 1; i += 2) {
-                if (bytes[i] == 0 && bytes[i + 1] >= 32 && bytes[i + 1] < 127)
-                    out[k++] = (char)bytes[i + 1];              // ASCII code point
-                else
-                    out[k++] = '?';                             // non-ASCII placeholder
-            }
-        } else {
-            for (size_t i = 0; i < nb && k < out_size - 1; i++)
-                out[k++] = (char)bytes[i];
-        }
-        out[k] = '\0';
-        return k > 0;
-    }
-
-    return 0;
+    if (!t || !pdf_text(t, out, out_size)) return 0;
+    return *t == '(' || out[0] != '\0';         // an empty hex /T<> names nothing
 }
 
 // Shared state for one field-tree walk.
