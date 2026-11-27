@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The Windows release binary is now built in MSYS2's UCRT64 environment
+  instead of MINGW64, so `ffpdf.exe` links the Universal C Runtime
+  (`ucrtbase.dll`) instead of the legacy `msvcrt.dll`. The UCRT ships with
+  Windows 10, Windows 11 and Windows Server 2016 and later; Windows 7 and 8.1
+  need update KB2999226. The binary is still statically linked with no other
+  DLL dependencies. MSYS2 no longer publishes pikepdf (used by the end-to-end
+  tests) for MINGW64, which broke the Windows CI job. The README's Windows
+  build instructions now use the UCRT64 package names.
+
 ### Fixed
 
 - Comb text fields (`/Ff` Comb flag with `/MaxLen`) are now drawn one
