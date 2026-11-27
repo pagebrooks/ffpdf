@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Comb text fields (`/Ff` Comb flag with `/MaxLen`) are now drawn one
+  character per cell: the field width is split into `MaxLen` equal cells and
+  each character is centered in its cell. They used to be drawn as one
+  left-aligned run, so digits bunched up at the left instead of lining up with
+  the printed boxes on forms such as tax IDs and ZIP codes. Applies to both
+  plain and `--flatten` fills (#21).
 - Object dictionaries that end in a hex string right before `>>` (for example
   `/V<ab>>>`) are now read whole. The hex string's closing `>` was paired with
   the dictionary's, cutting the dictionary one byte short. For a stream object

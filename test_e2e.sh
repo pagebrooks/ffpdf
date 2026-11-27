@@ -344,6 +344,64 @@ m = re.findall(rb"/V\(([A-Z]+)\)", data)
 assert m and m[-1] == b"ABCDE", m   # cut to 5 chars
 PY
 
+echo "== fill: comb text fields draw one glyph per cell =="
+# Comb (/Ff bit 25) + /MaxLen N: the appearance splits the width into N cells and
+# centers glyph i in cell i (ISO 32000-1 12.7.4.3). "fein" is the issue #21
+# shape (228pt wide, MaxLen 9, Helv 12); "zip" is a short value in Times-Bold;
+# "memo" also sets Multiline, which disables Comb, so it stays one run.
+python3 - "$TMP/comb.pdf" <<'PY'
+import sys
+W = b"/Type/Annot/Subtype/Widget/P 3 0 R"
+objs = {
+ 1: b"<</Type/Catalog/Pages 2 0 R/AcroForm 4 0 R>>",
+ 2: b"<</Type/Pages/Kids[3 0 R]/Count 1>>",
+ 3: b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Annots[5 0 R 6 0 R 7 0 R]>>",
+ 4: b"<</Fields[5 0 R 6 0 R 7 0 R]/DA(/Helv 12 Tf 0 g)/DR<</Font<</Helv 8 0 R>>>>>>",
+ 5: b"<</FT/Tx/T(fein)/Ff 25165824/MaxLen 9/Rect[72 600 300 620]/DA(/Helv 12 Tf 0 g)" + W + b">>",
+ 6: b"<</FT/Tx/T(zip)/Ff 16777216/MaxLen 5/Rect[72 500 172 520]/DA(/TiBo 10 Tf 0 g)" + W + b">>",
+ 7: b"<</FT/Tx/T(memo)/Ff 16781312/MaxLen 9/Rect[72 400 300 420]/DA(/Helv 12 Tf 0 g)" + W + b">>",
+ 8: b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica/Name/Helv>>",
+}
+o = bytearray(b"%PDF-1.7\n"); off = {}
+for n in sorted(objs):
+    off[n] = len(o); o += b"%d 0 obj\n" % n + objs[n] + b"\nendobj\n"
+x = len(o)
+o += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objs)+1)
+o += b"".join(b"%010d 00000 n \n" % off[n] for n in sorted(objs))
+o += b"trailer\n<</Size %d/Root 1 0 R>>\nstartxref\n%d\n%%%%EOF\n" % (len(objs)+1, x)
+open(sys.argv[1], "wb").write(o)
+PY
+printf '{"fein":"123456789","zip":"12","memo":"abc"}' > "$TMP/comb.json"
+$BIN fill -o "$TMP/combo.pdf" "$TMP/comb.pdf" "$TMP/comb.json" 2>/dev/null
+python3 - "$TMP/combo.pdf" <<'PY' && pass "comb: glyphs centered in MaxLen cells" || fail "comb appearance wrong"
+import sys, re
+d = open(sys.argv[1], "rb").read()
+def ap(field):
+    m = re.findall(rb"/T\(" + field + rb"\).*?/AP<</N (\d+) 0 R>>", d)
+    assert m, f"{field} has no /AP"
+    s = d[re.search(rb"\b%s 0 obj" % m[-1], d).start():]
+    return s[:s.index(b"endstream")]
+def cells(seg, width, n, fs, glyph_w):
+    runs = re.findall(rb"1 0 0 1 ([\d.]+) [\d.]+ Tm\n\((.)\) Tj", seg)
+    assert runs, "no per-glyph Tm/Tj runs"
+    cell = width / n
+    for i, (x, ch) in enumerate(runs):
+        center = float(x) + glyph_w * fs / 1000 / 2
+        assert abs(center - (i + 0.5) * cell) < 0.02, (i, ch, x)
+    return b"".join(ch for _, ch in runs)
+assert cells(ap(b"fein"), 228, 9, 12, 556) == b"123456789"   # Helvetica digits: 556
+assert cells(ap(b"zip"), 100, 5, 10, 500) == b"12"           # Times-Bold digits: 500, left cells
+memo = ap(b"memo")
+assert b"(abc) Tj" in memo and b" Tm\n" not in memo, "multiline comb must stay one run"
+PY
+# Flattening bakes the same comb appearance into the page.
+$BIN fill --flatten -o "$TMP/combf.pdf" "$TMP/comb.pdf" "$TMP/comb.json" 2>/dev/null
+python3 - "$TMP/combf.pdf" <<'PY' && pass "comb: flattened output keeps per-cell glyphs" || fail "comb lost on flatten"
+import sys, re
+d = open(sys.argv[1], "rb").read()
+assert re.findall(rb"Tm\n\((.)\) Tj", d)[:9] == [b"%d" % i for i in range(1, 10)]
+PY
+
 echo "== fill: JSON values + either-order / auto-detected input =="
 # The values file may be an FDF or a JSON object, in either order relative to
 # the PDF, auto-detected by content. Same JSON shape `fields` produces.
