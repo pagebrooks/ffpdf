@@ -475,3 +475,18 @@ void parse_indirect_ref(const char *p, int *num, int *gen) {
     while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
     *gen = atoi(p);
 }
+
+// Does `v` start with an indirect reference "N G R" (R followed by a delimiter)?
+int is_indirect_ref(const char *v) {
+    const char *p = v;
+    if (!isdigit((unsigned char)*p)) return 0;
+    while (isdigit((unsigned char)*p)) p++;
+    if (!isspace((unsigned char)*p)) return 0;
+    while (isspace((unsigned char)*p)) p++;
+    if (!isdigit((unsigned char)*p)) return 0;
+    while (isdigit((unsigned char)*p)) p++;
+    if (!isspace((unsigned char)*p)) return 0;
+    while (isspace((unsigned char)*p)) p++;
+    return *p == 'R' && (p[1] == '\0' || isspace((unsigned char)p[1]) ||
+                         strchr("/<>[]()%", p[1]) != NULL);
+}
