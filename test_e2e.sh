@@ -555,6 +555,64 @@ $BIN fill -o "$TMP/af_never.pdf" "$TMP/af_dangling.pdf" "$TMP/afin_v.json" 2>"$T
 [ "$ec" -eq 1 ] && grep -q "refers to object 99" "$TMP/af_err" && [ ! -e "$TMP/af_never.pdf" ] \
     && pass "/AcroForm dangling: fill exits 1 with the reason" || fail "/AcroForm dangling: fill exit $ec"
 
+echo "== field names, labels and options decoded as PDF text strings =="
+# /T, /TU and /Opt are text strings: literal escapes (\220 = PDFDocEncoding 0x90
+# = U+2019), raw PDFDocEncoding bytes, and UTF-16BE (BMP + surrogate pair) must
+# all come out as UTF-8, and fill must match the decoded names.
+python3 - "$TMP/txt.pdf" <<'PY'
+import sys
+W = b"/Type/Annot/Subtype/Widget/P 3 0 R/DA(/Helv 12 Tf 0 g)"
+utf16 = "Café 中\U0001F600".encode("utf-16-be").hex().upper().encode()
+objs = {
+ 1: b"<</Type/Catalog/Pages 2 0 R/AcroForm 4 0 R>>",
+ 2: b"<</Type/Pages/Kids[3 0 R]/Count 1>>",
+ 3: b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Annots[5 0 R 6 0 R 7 0 R]>>",
+ 4: b"<</Fields[5 0 R 6 0 R 7 0 R]/DA(/Helv 12 Tf 0 g)>>",
+ 5: b"<</FT/Tx/T(payee\\220s name)/TU(Preparer\\220s Name)/Rect[72 700 300 720]" + W + b">>",
+ 6: b"<</FT/Tx/T<FEFF" + utf16 + b">/TU(Raw \x90 byte)/Rect[72 650 300 670]" + W + b">>",
+ 7: b"<</FT/Ch/Ff 131072/T(pick)/Opt[(Caf\\351)[(d)<FEFF0044016B006E>]]/Rect[72 600 300 620]" + W + b">>",
+}
+o = bytearray(b"%PDF-1.7\n"); off = {}
+for n in sorted(objs):
+    off[n] = len(o); o += b"%d 0 obj\n" % n + objs[n] + b"\nendobj\n"
+x = len(o)
+o += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objs)+1)
+o += b"".join(b"%010d 00000 n \n" % off[n] for n in sorted(objs))
+o += b"trailer\n<</Size %d/Root 1 0 R>>\nstartxref\n%d\n%%%%EOF\n" % (len(objs)+1, x)
+open(sys.argv[1], "wb").write(o)
+PY
+$BIN fields "$TMP/txt.pdf" 2>/dev/null > "$TMP/txt.json"
+python3 - "$TMP/txt.json" <<'PY' && pass "text strings: names, labels, options decoded to UTF-8" || fail "text strings: fields output wrong"
+import json, sys
+d = json.loads(open(sys.argv[1], "rb").read().decode("utf-8"))   # strict UTF-8
+f = {x["name"]: x for x in d["fields"]}
+assert set(f) == {"payee’s name", "Café 中\U0001F600", "pick"}, list(f)
+assert f["payee’s name"]["label"] == "Preparer’s Name"
+assert f["Café 中\U0001F600"]["label"] == "Raw ’ byte"
+assert f["pick"]["options"] == ["Café", "Dūn"], f["pick"]["options"]
+PY
+# Fill by the decoded names; a curly apostrophe in a value still gets an
+# appearance (WinAnsi 0x92), and a choice matches its decoded display text.
+printf '{"payee\xe2\x80\x99s name":"O\xe2\x80\x99Brien","Caf\xc3\xa9 \xe4\xb8\xad\xf0\x9f\x98\x80":"x","pick":"D\xc5\xabn"}' > "$TMP/txt_v.json"
+$BIN fill --strict -o "$TMP/txt_o.pdf" "$TMP/txt.pdf" "$TMP/txt_v.json" 2>/dev/null; ec=$?
+python3 - "$TMP/txt_o.pdf" <<'PY' && [ "$ec" -eq 0 ] && pass "text strings: fill matches decoded names" || fail "text strings: fill by decoded name failed (exit $ec)"
+import sys
+d = open(sys.argv[1], "rb").read()
+assert b"(O\x92Brien) Tj" in d, "curly apostrophe not drawn as WinAnsi 0x92"
+assert b"/V(d)" in d, "choice export value not written"
+PY
+# fdf-extract writes non-ASCII names as UTF-16BE hex, so they feed back into fill.
+$BIN fdf-extract "$TMP/txt.pdf" 2>/dev/null > "$TMP/txt.fdf"
+$BIN fill --strict -o "$TMP/txt_rt.pdf" "$TMP/txt.pdf" "$TMP/txt.fdf" 2>"$TMP/txt_rt.err"; ec=$?
+[ "$ec" -eq 0 ] && grep -q "<FEFF" "$TMP/txt.fdf" && ! grep -q "not found" "$TMP/txt_rt.err" \
+    && pass "text strings: fdf-extract -> fill round-trips every name" || fail "text strings: FDF round-trip failed (exit $ec)"
+$BIN xfdf-extract "$TMP/txt.pdf" 2>/dev/null > "$TMP/txt.xfdf"
+python3 - "$TMP/txt.xfdf" <<'PY' && pass "text strings: xfdf-extract names are UTF-8" || fail "text strings: XFDF names wrong"
+import sys, xml.etree.ElementTree as ET
+names = {e.get("name") for e in ET.parse(sys.argv[1]).getroot().iter("{http://ns.adobe.com/xfdf/}field")}
+assert "payee’s name" in names and "Café 中\U0001F600" in names, names
+PY
+
 echo "== non-ASCII field value =="
 # A UTF-8 value with accents, CJK and an astral-plane emoji must be written as a
 # UTF-16BE hex string (<FEFF...>) so viewers render it, not as raw literal bytes

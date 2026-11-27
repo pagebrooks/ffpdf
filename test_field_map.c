@@ -155,8 +155,16 @@ static void test_read_partial_name(void) {
     // Hex UTF-16BE with a BOM: FEFF 0068 0069 -> "hi".
     CHECK(read_partial_name("<</T<FEFF00680069>>>", name, sizeof(name)) && strcmp(name, "hi") == 0);
 
-    // Non-ASCII UTF-16BE code point -> placeholder.
-    CHECK(read_partial_name("<</T<FEFF00E9>>>", name, sizeof(name)) && strcmp(name, "?") == 0);
+    // Non-ASCII UTF-16BE code points decode to UTF-8 (BMP and surrogate pair):
+    // "Caf\u00e9 \u4e2d\U0001F600".
+    CHECK(read_partial_name("<</T<FEFF00430061006600E900204E2DD83DDE00>>>", name, sizeof(name)) &&
+          strcmp(name, "Caf\xc3\xa9 \xe4\xb8\xad\xf0\x9f\x98\x80") == 0);
+
+    // Literal escapes per 7.3.4.2: \220 is PDFDocEncoding 0x90 = U+2019.
+    CHECK(read_partial_name("<</T(payee\\220s name)>>", name, sizeof(name)) &&
+          strcmp(name, "payee\xe2\x80\x99s name") == 0);
+    // Balanced unescaped parentheses belong to the string.
+    CHECK(read_partial_name("<</T(a(b)c)/FT/Tx>>", name, sizeof(name)) && strcmp(name, "a(b)c") == 0);
 
     // Hex without a BOM is PDFDocEncoding, not UTF-16: <46756C6C4E616D65> is
     // "FullName". Decrypted names from encrypted documents arrive in this form.
@@ -403,6 +411,48 @@ static void test_is_indirect_ref(void) {
     CHECK(!is_indirect_ref("null"));
 }
 
+// PDF text strings -> UTF-8 (ISO 32000-1 7.9.2.2): PDFDocEncoding, UTF-16BE,
+// UTF-8 with BOM, literal escapes, and truncation on a character boundary.
+static void test_pdf_text(void) {
+    char out[64];
+    // Raw PDFDocEncoding bytes: 0x90 = U+2019, 0x18 = U+02D8, 0xE9 = U+00E9 (Latin-1).
+    CHECK(pdf_text("(a\x90" "b\x18" "c\xe9)", out, sizeof(out)) &&
+          strcmp(out, "a\xe2\x80\x99" "b\xcb\x98" "c\xc3\xa9") == 0);
+    // Undefined PDFDocEncoding bytes (0x7F, 0x9F, 0xAD) become U+FFFD.
+    CHECK(pdf_text("(\x7f\x9f\xad)", out, sizeof(out)) &&
+          strcmp(out, "\xef\xbf\xbd\xef\xbf\xbd\xef\xbf\xbd") == 0);
+    // Escapes: \n, octal, line continuation (no byte), escaped parens.
+    CHECK(pdf_text("(x\\ny\\101\\\nz\\(\\))", out, sizeof(out)) && strcmp(out, "x\nyAz()") == 0);
+    // UTF-16BE: an unpaired high surrogate becomes U+FFFD; U+0000 is dropped.
+    CHECK(pdf_text("<FEFFD8000041 0000 0042>", out, sizeof(out)) &&
+          strcmp(out, "\xef\xbf\xbd" "AB") == 0);
+    // A literal string holding the FE FF BOM is UTF-16BE too.
+    CHECK(pdf_text("(\\376\\377\\000H\\000i)", out, sizeof(out)) && strcmp(out, "Hi") == 0);
+    // UTF-8 with the EF BB BF BOM (PDF 2.0): copied, invalid bytes -> U+FFFD.
+    CHECK(pdf_text("<EFBBBF43C3A9FF>", out, sizeof(out)) &&
+          strcmp(out, "C\xc3\xa9\xef\xbf\xbd") == 0);
+    // Not a string.
+    CHECK(pdf_text("/Name", out, sizeof(out)) == NULL && out[0] == '\0');
+    CHECK(pdf_text("<</A 1>>", out, sizeof(out)) == NULL);
+    // Truncation never splits a character: "\u00e9\u00e9" needs 5 bytes; cap 4 keeps one.
+    CHECK(pdf_text("(\xe9\xe9)", out, 4) && strcmp(out, "\xc3\xa9") == 0);
+    // The returned pointer is just past the string.
+    const char *s = "(a\\)b)/Next";
+    CHECK(pdf_text(s, out, sizeof(out)) == s + 6);
+    s = "<4142>/Next";
+    CHECK(pdf_text(s, out, sizeof(out)) == s + 6 && strcmp(out, "AB") == 0);
+    // Allocating form.
+    char *a = pdf_text_alloc("<FEFF20AC>");
+    CHECK(a && strcmp(a, "\xe2\x82\xac") == 0);
+    free(a);
+    CHECK(pdf_text_alloc("42") == NULL);
+    // Input-file variant: raw UTF-8 is kept as UTF-8; PDFDoc bytes that are not
+    // valid UTF-8 still decode as PDFDocEncoding.
+    CHECK(pdf_text_input("(caf\xc3\xa9)", out, sizeof(out)) && strcmp(out, "caf\xc3\xa9") == 0);
+    CHECK(pdf_text("(caf\xc3\xa9)", out, sizeof(out)) && strcmp(out, "caf\xc3\x83\xc2\xa9") == 0);
+    CHECK(pdf_text_input("(payee\x90s)", out, sizeof(out)) && strcmp(out, "payee\xe2\x80\x99s") == 0);
+}
+
 int main(void) {
     test_find_key();
     test_crypto();
@@ -414,6 +464,7 @@ int main(void) {
     test_extract_dict_inner();
     test_remove_entry();
     test_read_partial_name();
+    test_pdf_text();
     test_field_type();
     test_skip_value();
     test_field_array_text_inline();

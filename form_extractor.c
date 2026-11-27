@@ -38,10 +38,31 @@ static const char *field_value(FILE *f, XRefTable *xref, int obj_num,
 
 // Emit `name` as the body of an FDF literal string (escaping "(", ")", "\").
 static void print_fdf_name(const char *name) {
-    for (const char *s = name; *s; s++) {
-        if (*s == '(' || *s == ')' || *s == '\\') putchar('\\');
-        putchar(*s);
+    int ascii = 1;
+    for (const unsigned char *s = (const unsigned char *)name; *s; s++)
+        if (*s >= 0x80) { ascii = 0; break; }
+    if (ascii) {                                   // readable literal string
+        putchar('(');
+        for (const char *s = name; *s; s++) {
+            if (*s == '(' || *s == ')' || *s == '\\') putchar('\\');
+            putchar(*s);
+        }
+        putchar(')');
+        return;
     }
+    // Non-ASCII (the name is UTF-8): a UTF-16BE hex string with a BOM, the PDF
+    // text-string encoding that represents every character.
+    fputs("<FEFF", stdout);
+    for (const unsigned char *s = (const unsigned char *)name; *s; ) {
+        unsigned cp = utf8_next(&s);
+        if (cp > 0xFFFF) {
+            cp -= 0x10000;
+            printf("%04X%04X", 0xD800 + (cp >> 10), 0xDC00 + (cp & 0x3FF));
+        } else {
+            printf("%04X", cp);
+        }
+    }
+    putchar('>');
 }
 
 // Emit `name` as an XML attribute value (escaping & < > ").
@@ -70,17 +91,17 @@ int extract_form_fields_xfdf(FILE *f, const XRefTable *xref_table) {
         printf("    <field name=\"");
         print_xml_attr(map.items[i].qname);
         printf("\">\n");
-        // Values XFDF can carry as plain text: literal strings (unescaped) and
-        // names (without the slash). Hex/UTF-16 strings and arrays are beyond
-        // this simple exporter and emit an empty <value>.
+        // Values XFDF can carry as plain text: text strings (decoded to UTF-8)
+        // and names (without the slash). Arrays are beyond this simple exporter
+        // and emit an empty <value>.
         char *dict = NULL;
         const char *v = field_value(f, (XRefTable *)xref_table,
                                     map.items[i].obj_num, &dict);
         printf("      <value>");
-        if (v && *v == '(') {
-            char *plain = NULL;
-            read_literal_alloc(v, &plain);
-            if (plain) { print_xml_attr(plain); free(plain); }
+        char *plain = v ? pdf_text_alloc(v) : NULL;
+        if (plain) {
+            print_xml_attr(plain);
+            free(plain);
         } else if (v && *v == '/') {
             char name[128]; int n = 0;
             for (v++; *v && !isspace((unsigned char)*v) && *v != '/' &&
@@ -110,9 +131,9 @@ int extract_form_fields_fdf(FILE *f, const XRefTable *xref_table) {
     printf("%%FDF-1.2\n1 0 obj\n<<\n/FDF\n<<\n/Fields [\n");
     for (int i = 0; i < map.count; i++) {
         if (!map.items[i].terminal) continue;      // only fillable leaf fields
-        printf("<<\n/T (");
+        printf("<<\n/T ");
         print_fdf_name(map.items[i].qname);
-        printf(")\n");
+        printf("\n");
         // The raw /V is already valid FDF syntax whatever its type: literal or
         // hex string, name (/Yes), or array of strings. Copy it verbatim.
         char *dict = NULL;
@@ -157,88 +178,49 @@ static void put_utf8(unsigned long cp) {
     }
 }
 
-// Print `len` bytes as the body of a JSON string (no quotes), escaping the
-// characters JSON requires. Bytes are emitted verbatim (the callers hand us
-// UTF-8 or PDFDoc/ASCII text).
+// Print UTF-8 text `s` (`len` bytes) as the body of a JSON string (no quotes),
+// escaping the characters JSON requires. The output is always valid UTF-8:
+// malformed bytes and surrogate code points become U+FFFD.
 static void json_body(const unsigned char *s, size_t len) {
-    for (size_t i = 0; i < len; i++) {
-        unsigned char c = s[i];
-        switch (c) {
+    for (size_t i = 0; i < len; ) {
+        // utf8_next needs a NUL-terminated view; copy one sequence at a time.
+        unsigned char seq[5] = {0};
+        size_t sl = len - i < 4 ? len - i : 4;
+        memcpy(seq, s + i, sl);
+        const unsigned char *q = seq;
+        unsigned long cp = utf8_next(&q);
+        size_t used = (size_t)(q - seq);
+        i += used ? used : 1;
+        if ((cp >= 0x80 && used == 1) || (cp >= 0xD800 && cp <= 0xDFFF)) cp = 0xFFFD;
+        switch (cp) {
             case '"':  fputs("\\\"", stdout); break;
             case '\\': fputs("\\\\", stdout); break;
             case '\n': fputs("\\n", stdout); break;
             case '\r': fputs("\\r", stdout); break;
             case '\t': fputs("\\t", stdout); break;
             default:
-                if (c < 0x20) printf("\\u%04x", c);
-                else putchar(c);
+                if (cp < 0x20) printf("\\u%04lx", cp);
+                else put_utf8(cp);
         }
     }
 }
 
-// Print a PDF text string (raw bytes from a literal or hex string) as a JSON
-// string, quotes included. UTF-16BE text (leading FE FF BOM, the PDF encoding
-// for non-ASCII values) is converted to UTF-8, surrogate pairs included.
-static void json_pdf_text(const unsigned char *s, size_t len) {
+// Print a UTF-8 C string as a JSON string, quotes included.
+static void json_string(const char *s) {
     putchar('"');
-    if (len >= 2 && s[0] == 0xFE && s[1] == 0xFF) {
-        for (size_t i = 2; i + 1 < len; i += 2) {
-            unsigned long cp = ((unsigned long)s[i] << 8) | s[i + 1];
-            if (cp >= 0xD800 && cp <= 0xDBFF && i + 3 < len) {   // surrogate pair
-                unsigned long lo = ((unsigned long)s[i + 2] << 8) | s[i + 3];
-                if (lo >= 0xDC00 && lo <= 0xDFFF) {
-                    cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
-                    i += 2;
-                }
-            }
-            if (cp == '"' || cp == '\\' || cp < 0x20) {
-                char tmp[2] = { (char)cp, 0 };
-                json_body((const unsigned char *)tmp, 1);
-            } else put_utf8(cp);
-        }
-    } else {
-        json_body(s, len);
-    }
+    json_body((const unsigned char *)s, strlen(s));
     putchar('"');
-}
-
-// Decode a hex string starting at '<' into malloc'd bytes; returns length.
-static size_t hex_string_bytes(const char *p, unsigned char **out) {
-    size_t n = 0, cap = 64;
-    unsigned char *buf = malloc(cap);
-    int hi = -1;
-    for (p++; buf && *p && *p != '>'; p++) {
-        int d;
-        if (*p >= '0' && *p <= '9') d = *p - '0';
-        else if (*p >= 'a' && *p <= 'f') d = *p - 'a' + 10;
-        else if (*p >= 'A' && *p <= 'F') d = *p - 'A' + 10;
-        else continue;
-        if (hi < 0) { hi = d; continue; }
-        if (n == cap) { cap *= 2; unsigned char *g = realloc(buf, cap); if (!g) { free(buf); buf = NULL; break; } buf = g; }
-        buf[n++] = (unsigned char)((hi << 4) | d);
-        hi = -1;
-    }
-    if (buf && hi >= 0 && n < cap) buf[n++] = (unsigned char)(hi << 4);  // odd digit: pad
-    *out = buf;
-    return buf ? n : 0;
 }
 
 // Print one /V value (literal string, hex string, name, or array of strings)
 // as JSON. Emits null for absent values and indirect references.
 static void json_value(const char *v) {
     if (!v) { fputs("null", stdout); return; }
-    if (*v == '(') {
-        char *plain = NULL;
-        read_literal_alloc(v, &plain);
-        if (!plain) { fputs("null", stdout); return; }
-        json_pdf_text((const unsigned char *)plain, strlen(plain));
-        free(plain);
-    } else if (*v == '<' && v[1] != '<') {
-        unsigned char *bytes = NULL;
-        size_t n = hex_string_bytes(v, &bytes);
-        if (!bytes) { fputs("null", stdout); return; }
-        json_pdf_text(bytes, n);
-        free(bytes);
+    if (*v == '(' || (*v == '<' && v[1] != '<')) {   // text string
+        char *text = pdf_text_alloc(v);
+        if (!text) { fputs("null", stdout); return; }
+        json_string(text);
+        free(text);
     } else if (*v == '/') {
         v++;
         size_t n = 0;
@@ -416,7 +398,7 @@ int extract_form_fields_json(FILE *f, const XRefTable *xref_table) {
                     printf(",\n      \"options\": [");
                     for (int j = 0; j < rn; j++) {
                         if (j) fputs(", ", stdout);
-                        json_pdf_text((const unsigned char *)names[j], strlen(names[j]));
+                        json_string(names[j]);
                     }
                     putchar(']');
                 }
@@ -425,7 +407,7 @@ int extract_form_fields_json(FILE *f, const XRefTable *xref_table) {
                 if (field_checkbox_on_state(f, (XRefTable *)xref_table, dict,
                                             on, sizeof(on))) {
                     printf(",\n      \"on_state\": ");
-                    json_pdf_text((const unsigned char *)on, strlen(on));
+                    json_string(on);
                 }
             }
         }
@@ -440,8 +422,7 @@ int extract_form_fields_json(FILE *f, const XRefTable *xref_table) {
                 printf(",\n      \"options\": [");
                 for (int j = 0; j < n; j++) {
                     if (j) fputs(", ", stdout);
-                    json_pdf_text((const unsigned char *)disp[j],
-                                  strlen(disp[j]));
+                    json_string(disp[j]);
                 }
                 putchar(']');
             }

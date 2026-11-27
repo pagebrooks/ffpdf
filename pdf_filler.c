@@ -148,26 +148,6 @@ static void append_escaped_string(Buf *b, const char *s) {
     }
 }
 
-// Decode one UTF-8 code point from *s (NUL-terminated) and advance *s past it.
-// On a malformed lead/continuation byte, consume a single byte and return it
-// unchanged (U+0000..U+00FF), so no input is lost on non-UTF-8 or truncated data.
-static unsigned utf8_next(const unsigned char **s) {
-    const unsigned char *p = *s;
-    unsigned c = p[0], cp;
-    int n;                                        // continuation bytes expected
-    if (c < 0x80)                { *s = p + 1; return c; }
-    else if ((c & 0xE0) == 0xC0) { n = 1; cp = c & 0x1F; }
-    else if ((c & 0xF0) == 0xE0) { n = 2; cp = c & 0x0F; }
-    else if ((c & 0xF8) == 0xF0) { n = 3; cp = c & 0x07; }
-    else                         { *s = p + 1; return c; }   // stray continuation
-    for (int i = 1; i <= n; i++) {
-        if ((p[i] & 0xC0) != 0x80) { *s = p + 1; return c; }  // truncated sequence
-        cp = (cp << 6) | (p[i] & 0x3F);
-    }
-    *s = p + n + 1;
-    return cp;
-}
-
 // Write `s` (assumed UTF-8) as a PDF text-string value. Pure-ASCII values are
 // emitted as a readable literal string; any value with a byte >= 0x80 is emitted
 // as a UTF-16BE hex string with a leading BOM (U+FEFF) -- the only encoding PDF
@@ -246,8 +226,8 @@ static void emit_stream_object(Buf *o, const PdfCrypt *crypt, int num, int gen,
  * appearance: a Form XObject that draws the value with the field's /DA font,
  * and point the widget's /AP /N at it.
  *
- * Scope: single-line text fields whose value is representable in WinAnsi (ASCII
- * + Latin-1), left-aligned (or one glyph per cell for comb fields), using a
+ * Scope: single-line text fields whose value is representable in WinAnsi (ASCII,
+ * Latin-1 and typographic punctuation), left-aligned (or one glyph per cell for comb fields), using a
  * standard-14 font. Values with characters outside WinAnsi (CJK, emoji) or
  * fields without a usable /Rect are skipped and fall back to /NeedAppearances,
  * which stays set.
@@ -280,17 +260,32 @@ static const char *base_font_for(const char *name) {
     return "Helvetica";
 }
 
+// Unicode code points of WinAnsiEncoding bytes 0x80..0x9F (0 = undefined).
+static const unsigned short WINANSI_80[32] = {
+    0x20AC, 0,      0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
+    0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0,      0x017D, 0,
+    0,      0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+    0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0,      0x017E, 0x0178,
+};
+
+// WinAnsi byte for code point `cp`, or 0 if it has none.
+static unsigned char winansi_byte(unsigned cp) {
+    if ((cp >= 0x20 && cp <= 0x7E) || (cp >= 0xA0 && cp <= 0xFF)) return (unsigned char)cp;
+    for (int i = 0; i < 32; i++)
+        if (WINANSI_80[i] && WINANSI_80[i] == cp) return (unsigned char)(0x80 + i);
+    return 0;
+}
+
 // Encode `s` (UTF-8) as an escaped WinAnsi PDF-string body into `out`. Returns 1
 // if every character is WinAnsi-representable, 0 otherwise (caller skips the AP).
-// WinAnsi and Latin-1 agree on 0x20..0x7E and 0xA0..0xFF; 0x80..0x9F and code
-// points above 0xFF are treated as not representable.
+// WinAnsi is Latin-1 plus typographic characters (curly quotes, dashes, the
+// euro sign, ...) at 0x80..0x9F.
 static int winansi_escape(const char *s, Buf *out) {
     const unsigned char *p = (const unsigned char *)s;
     while (*p) {
-        unsigned cp = utf8_next(&p);
-        if (!((cp >= 0x20 && cp <= 0x7E) || (cp >= 0xA0 && cp <= 0xFF))) return 0;
-        if (cp == '(' || cp == ')' || cp == '\\') buf_put(out, "\\", 1);
-        unsigned char b = (unsigned char)cp;
+        unsigned char b = winansi_byte(utf8_next(&p));
+        if (!b) return 0;
+        if (b == '(' || b == ')' || b == '\\') buf_put(out, "\\", 1);
         buf_put(out, &b, 1);
     }
     return 1;
@@ -415,10 +410,9 @@ static void append_appearance_stream(Buf *out, const PdfCrypt *crypt, int ap_obj
     free(cs.data);
 }
 
-// Enumerate a choice field's /Opt display strings into disp[] (each option's
-// display text: the 2nd element of an [export display] pair, else the string).
-// Returns the count (<= max), or -1 if any option is not WinAnsi-representable
-// (so the caller skips the list-box appearance and relies on /NeedAppearances).
+// Enumerate a choice field's /Opt display strings into disp[] as UTF-8 (each
+// option's display text: the 2nd element of an [export display] pair, else the
+// string). Returns the count (<= max).
 int field_choice_options(FILE *f, XRefTable *xref, const char *dict,
                          char disp[][256], int max) {
     char *opt = field_array_text(f, xref, dict, "/Opt");
@@ -431,23 +425,20 @@ int field_choice_options(FILE *f, XRefTable *xref, const char *dict,
         while (isspace((unsigned char)*p)) p++;
         if (*p == '\0' || *p == ']') break;
         char d[256] = "";
-        if (*p == '(') {
-            p = read_literal(p, d, sizeof(d));
+        const char *q;
+        if ((q = pdf_text(p, d, sizeof(d))) != NULL) {
+            p = q;
         } else if (*p == '[') {                     // [export display]
             char ex[256] = "";
             p++;
             while (isspace((unsigned char)*p)) p++;
-            if (*p == '(') p = read_literal(p, ex, sizeof(ex));
+            if ((q = pdf_text(p, ex, sizeof(ex))) != NULL) p = q;
             while (isspace((unsigned char)*p)) p++;
-            if (*p == '(') p = read_literal(p, d, sizeof(d));
+            if ((q = pdf_text(p, d, sizeof(d))) != NULL) p = q;
             else snprintf(d, sizeof(d), "%s", ex);
             while (*p && *p != ']') p++;
             if (*p == ']') p++;
         } else break;
-        Buf tb = {0};                                // WinAnsi-representable?
-        int ok = winansi_escape(d, &tb);
-        free(tb.data);
-        if (!ok) { free(opt); return -1; }
         snprintf(disp[n++], 256, "%s", d);
     }
     free(opt);
@@ -546,15 +537,16 @@ static int choice_index(FILE *f, XRefTable *xref, const char *dict, const char *
         while (isspace((unsigned char)*p)) p++;
         if (*p == '\0' || *p == ']') break;
         char exp[512] = "", disp[512] = "";
-        if (*p == '(') {
-            p = read_literal(p, exp, sizeof(exp));
+        const char *q;
+        if ((q = pdf_text(p, exp, sizeof(exp))) != NULL) {
+            p = q;
             snprintf(disp, sizeof(disp), "%s", exp);
         } else if (*p == '[') {                     // [export display]
             p++;
             while (isspace((unsigned char)*p)) p++;
-            if (*p == '(') p = read_literal(p, exp, sizeof(exp));
+            if ((q = pdf_text(p, exp, sizeof(exp))) != NULL) p = q;
             while (isspace((unsigned char)*p)) p++;
-            if (*p == '(') p = read_literal(p, disp, sizeof(disp));
+            if ((q = pdf_text(p, disp, sizeof(disp))) != NULL) p = q;
             else snprintf(disp, sizeof(disp), "%s", exp);
             while (*p && *p != ']') p++;
             if (*p == ']') p++;
@@ -998,9 +990,9 @@ static FdfData *parse_fdf_mem(const char *content) {
         const char *v = p + 2;
         if (isalnum((unsigned char)*v)) { p = v; continue; }   // e.g. /Type
         while (*v == ' ' || *v == '\n' || *v == '\r' || *v == '\t') v++;
-        if (*v != '(') { p = v; continue; }
         char name[256];
-        const char *after = read_literal(v, name, sizeof(name));
+        const char *after = pdf_text_input(v, name, sizeof(name));   // literal or hex
+        if (!after) { p = v; continue; }
 
         // Find the value: the next "/V" before the next "/T". `value` is heap-
         // allocated (unbounded) so long text values are not silently truncated.
@@ -1012,12 +1004,16 @@ static FdfData *parse_fdf_mem(const char *content) {
         if (vp && (!next_t || vp < next_t)) {
             const char *w = vp + 2;
             while (*w == ' ' || *w == '\n' || *w == '\r' || *w == '\t') w++;
-            if (*w == '(') read_literal_alloc(w, &value);
-            else if (*w == '[') {   // multi-select choice: array of literal strings
+            if (*w == '(' || (*w == '<' && w[1] != '<')) value = pdf_text_input_alloc(w);
+            else if (*w == '[') {   // multi-select choice: array of text strings
                 const char *q = w + 1;
                 while (*q && *q != ']' && mcount < 64) {
                     while (isspace((unsigned char)*q)) q++;
-                    if (*q == '(') q = read_literal_alloc(q, &marray[mcount++]);
+                    if (*q == '(' || (*q == '<' && q[1] != '<')) {
+                        marray[mcount] = pdf_text_input_alloc(q);
+                        q = skip_value(q);
+                        if (marray[mcount]) mcount++;
+                    }
                     else if (*q == ']') break;
                     else q++;
                 }
@@ -1357,6 +1353,12 @@ static void emit_filled_field(FillCtx *c, FieldMap *map, FdfData *fdf, int i, Fi
         ldisp = malloc(128 * 256);
         if (ldisp) {
             lnopt = field_choice_options(c->f, c->xref, fodict, ldisp, 128);
+            for (int j = 0; j < lnopt; j++) {            // every row must be drawable
+                Buf tb = {0};
+                int ok = winansi_escape(ldisp[j], &tb);
+                free(tb.data);
+                if (!ok) { lnopt = 0; break; }
+            }
             if (lnopt > 0) {
                 if (fdf->fields[i].nvalues > 1) {         // multi-select
                     for (int j = 0; j < fdf->fields[i].nvalues && lnsel < 64; j++) {
