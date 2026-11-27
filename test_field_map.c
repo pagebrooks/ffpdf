@@ -453,6 +453,29 @@ static void test_pdf_text(void) {
     CHECK(pdf_text_input("(payee\x90s)", out, sizeof(out)) && strcmp(out, "payee\xe2\x80\x99s") == 0);
 }
 
+static void test_raw_nul_literals(void) {
+    // An /Encrypt-style dictionary whose literal strings carry raw 0x00 bytes
+    // (#19). sizeof-1 keeps the embedded NULs in the length.
+    static const char d[] = "<</Filter/Standard/O(a\0b\\)c)/U(\0\0)/UE<0A 0B>/V 5>> trailing";
+    const char *end = d + sizeof(d) - 1;
+    const char *close = match_dict_end_n(d, end);
+    CHECK(close != NULL && strncmp(close - 2, ">>", 2) == 0 && *close == ' ');
+    CHECK(match_dict_end(d) == NULL);                 // the C-string scan stops at the NUL
+    CHECK(match_dict_end_n(d, d + 20) == NULL);       // not closed within the bound
+    char *h = pdf_hexify_literals(d, (size_t)(close - d));
+    CHECK(h && strcmp(h, "<</Filter/Standard/O<6100622963>/U<0000>/UE<0A 0B>/V 5>>") == 0);
+    if (h) {
+        CHECK(find_key(h, "/V") && atoi(find_key(h, "/V")) == 5);   // keys past the NULs
+        CHECK(find_key(h, "/U") && !strncmp(find_key(h, "/U"), "<0000>", 6));  // not /UE
+    }
+    free(h);
+    // A NUL outside any string is white-space; escapes decode before hexing.
+    static const char e[] = "<</A 1\0/B(\\101\r\n)>>";
+    h = pdf_hexify_literals(e, sizeof(e) - 1);
+    CHECK(h && strcmp(h, "<</A 1 /B<410A>>>") == 0);
+    free(h);
+}
+
 int main(void) {
     test_find_key();
     test_crypto();
@@ -465,6 +488,7 @@ int main(void) {
     test_remove_entry();
     test_read_partial_name();
     test_pdf_text();
+    test_raw_nul_literals();
     test_field_type();
     test_skip_value();
     test_field_array_text_inline();

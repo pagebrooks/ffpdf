@@ -29,6 +29,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Encrypted PDFs whose binary strings are written as literal strings
+  containing raw 0x00 bytes now open. An `/Encrypt` dictionary with such an
+  `/O` or `/U` (Acrobat writes them this way; the California STD 204, an
+  AES-256 R6 form, is one) was cut off at the first NUL and reported as
+  unreadable (#19). The same cut dropped any directly stored object whose
+  encrypted strings contained a NUL, so a field could silently go missing from
+  `fields` and `fill`. Such strings are now read in full.
+- `/Encrypt` entries are matched as whole top-level keys, so `/U` is no longer
+  confused with `/UE` or with bytes inside another entry's binary string.
 - `fill --flatten` no longer blanks a page whose `/Contents` is an indirect
   reference to an array of streams (`/Contents 12 0 R` with object 12
   `[6 0 R 7 0 R]`). The array was nested inside the new `/Contents` array,

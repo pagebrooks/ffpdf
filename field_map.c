@@ -137,6 +137,8 @@ static char *get_compressed_object(FILE *f, XRefTable *xref, int obj_num) {
     // underflow `len` to ~SIZE_MAX and memcpy off the end of the heap buffer.
     if (start >= s->len || objend < start) return NULL;
     size_t len = objend - start;
+    if (memchr(s->data + start, '\0', len))          // raw NULs in a literal string
+        return pdf_hexify_literals(s->data + start, len);
     char *out = malloc(len + 1);
     if (out) { memcpy(out, s->data + start, len); out[len] = '\0'; }
     return out;
@@ -182,7 +184,7 @@ static char *read_object_bytes(FILE *f, long off, size_t *got_out) {
         const char *v = object_value_start(buf);
         if (v) {
             if (v[0] == '<' && v[1] == '<')
-                complete = (match_dict_end(v) != NULL);
+                complete = (match_dict_end_n(v, buf + got) != NULL);
             else if (*v == '[')
                 complete = ((size_t)(skip_value(v) - buf) < got);  // closed before EOB
         }
@@ -216,7 +218,7 @@ char *get_object_raw(FILE *f, XRefTable *xref, int obj_num, int *gen_out) {
         char *out = NULL;
         const char *start = object_value_start(buf);
         if (start && !(start[0] == '<' && start[1] == '<')) start = NULL;
-        const char *close = start ? match_dict_end(start) : NULL;
+        const char *close = start ? match_dict_end_n(start, buf + got) : NULL;
         if (close) {
             if (gen_out) {                            // "N G obj" -> generation
                 const char *p = buf;
@@ -226,8 +228,15 @@ char *get_object_raw(FILE *f, XRefTable *xref, int obj_num, int *gen_out) {
                 *gen_out = atoi(p);
             }
             size_t len = (size_t)(close - start);
-            out = malloc(len + 1);
-            if (out) { memcpy(out, start, len); out[len] = '\0'; }
+            if (memchr(start, '\0', len)) {
+                // A literal string holds raw 0x00 bytes (legal; binary /O and /U
+                // strings in an /Encrypt dictionary often do). Callers scan the
+                // text as a C string, so re-spell the literals as hex.
+                out = pdf_hexify_literals(start, len);
+            } else {
+                out = malloc(len + 1);
+                if (out) { memcpy(out, start, len); out[len] = '\0'; }
+            }
         }
         free(buf);
         // Encrypted document: strings in this uncompressed object are ciphertext.
