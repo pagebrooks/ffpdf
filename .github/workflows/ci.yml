@@ -67,20 +67,22 @@ jobs:
           mkdir pkg && cp ffpdf LICENSE NOTICE README.md ffpdf.1 pkg/
           tar -czf "${{ matrix.artifact }}" -C pkg .
 
-      # ---- Windows: MSYS2 / MinGW-w64 gcc + zlib, static self-contained .exe ----
+      # ---- Windows: MSYS2 UCRT64 gcc + zlib, static self-contained .exe ----
+      # UCRT64 links the Universal C Runtime (built into Windows 10+). MSYS2 no
+      # longer ships python-pikepdf for the legacy msvcrt MINGW64 environment.
       - name: Set up MSYS2 (Windows)
         if: matrix.name == 'windows'
         uses: msys2/setup-msys2@v2
         with:
-          msystem: MINGW64
+          msystem: UCRT64
           update: true
           install: >-
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-zlib
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-zlib
             make
             python
             zip
-            mingw-w64-x86_64-python-pikepdf
+            mingw-w64-ucrt-x86_64-python-pikepdf
       - name: Build & test (Windows)
         if: matrix.name == 'windows'
         shell: msys2 {0}

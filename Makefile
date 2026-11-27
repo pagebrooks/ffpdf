@@ -7,9 +7,9 @@ LDFLAGS = -lz
 
 # ---- Platform / toolchain detection ----
 # Linux and macOS (Darwin) build out of the box. For Windows, either build in an
-# MSYS2/MinGW shell or cross-compile from Linux with:
+# MSYS2 UCRT64 shell (what CI and the release use) or cross-compile from Linux with:
 #     make CC=x86_64-w64-mingw32-gcc
-# (needs a MinGW zlib: pacman -S mingw-w64-x86_64-zlib, or vcpkg, or vendored).
+# (needs a MinGW zlib: pacman -S mingw-w64-ucrt-x86_64-zlib, or vcpkg, or vendored).
 UNAME_S := $(shell uname -s 2>/dev/null)
 WINDOWS :=
 ifneq (,$(findstring mingw,$(CC))$(findstring MINGW,$(UNAME_S))$(findstring MSYS,$(UNAME_S))$(findstring CYGWIN,$(UNAME_S)))
