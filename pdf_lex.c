@@ -48,6 +48,41 @@ const char *match_dict_end(const char *start) {
     return NULL;
 }
 
+// As skip_literal_string, but bounded by `end` instead of a NUL: a raw 0x00
+// byte inside the string is an ordinary byte (ISO 32000-1 7.3.4.2).
+static const char *skip_literal_n(const char *p, const char *end) {
+    int depth = 1; p++;
+    while (p < end && depth > 0) {
+        if (*p == '\\') { p += (p + 1 < end) ? 2 : 1; continue; }
+        if (*p == '(') depth++;
+        else if (*p == ')') depth--;
+        p++;
+    }
+    return p;
+}
+
+const char *match_dict_end_n(const char *start, const char *end) {
+    const char *p = start + 2;
+    int depth = 1;
+    while (p < end) {
+        if (*p == '(') { p = skip_literal_n(p, end); continue; }
+        if (p + 1 < end && p[0] == '<' && p[1] == '<') { depth++; p += 2; continue; }
+        if (p + 1 < end && p[0] == '>' && p[1] == '>') {
+            depth--; p += 2;
+            if (depth == 0) return p;
+            continue;
+        }
+        if (*p == '<') {                      // hex string
+            p++;
+            while (p < end && *p != '>') p++;
+            if (p < end) p++;
+            continue;
+        }
+        p++;
+    }
+    return NULL;
+}
+
 // Find `key` (e.g. "/T") as a top-level dictionary key in `dict`, returning a
 // pointer to its leading '/', or NULL. Skips over string/array/nested-dict
 // contents so the same byte sequence inside a value (e.g. "/V" inside a /TU
@@ -209,15 +244,19 @@ const char *read_literal_alloc(const char *p, char **out) {
     return p;
 }
 
-const char *pdf_literal_bytes(const char *p, unsigned char *out, size_t cap, size_t *len) {
+// Decoder behind pdf_literal_bytes. The string ends at `end`, or at a NUL when
+// `end` is NULL.
+static const char *literal_bytes_core(const char *p, const char *end,
+                                      unsigned char *out, size_t cap, size_t *len) {
     size_t n = 0;
     int depth = 1;
 #define PUT(b) do { if (n < cap) out[n++] = (unsigned char)(b); } while (0)
+#define MORE() (end ? p < end : *p != '\0')
     p++;   // skip '('
-    while (*p) {
+    while (MORE()) {
         unsigned char c = (unsigned char)*p++;
         if (c == '\\') {
-            if (!*p) break;
+            if (!MORE()) break;
             c = (unsigned char)*p++;
             switch (c) {
                 case 'n': PUT('\n'); break;
@@ -225,12 +264,12 @@ const char *pdf_literal_bytes(const char *p, unsigned char *out, size_t cap, siz
                 case 't': PUT('\t'); break;
                 case 'b': PUT('\b'); break;
                 case 'f': PUT('\f'); break;
-                case '\r': if (*p == '\n') p++; break;   // line continuation: no byte
+                case '\r': if (MORE() && *p == '\n') p++; break;   // line continuation: no byte
                 case '\n': break;
                 default:
                     if (c >= '0' && c <= '7') {           // \d, \dd or \ddd octal
                         int v = c - '0';
-                        for (int i = 0; i < 2 && *p >= '0' && *p <= '7'; i++)
+                        for (int i = 0; i < 2 && MORE() && *p >= '0' && *p <= '7'; i++)
                             v = v * 8 + (*p++ - '0');
                         PUT(v & 0xff);                    // high-order overflow ignored
                     } else {
@@ -241,12 +280,52 @@ const char *pdf_literal_bytes(const char *p, unsigned char *out, size_t cap, siz
         }
         if (c == '(') depth++;
         else if (c == ')' && --depth == 0) break;
-        else if (c == '\r') { if (*p == '\n') p++; c = '\n'; }   // bare EOL reads as LF
+        else if (c == '\r') { if (MORE() && *p == '\n') p++; c = '\n'; }   // bare EOL reads as LF
         PUT(c);
     }
+#undef MORE
 #undef PUT
     *len = n;
     return p;
+}
+
+const char *pdf_literal_bytes(const char *p, unsigned char *out, size_t cap, size_t *len) {
+    return literal_bytes_core(p, NULL, out, cap, len);
+}
+
+char *pdf_hexify_literals(const char *s, size_t n) {
+    // A literal of r bytes (parentheses included) decodes to at most r - 1
+    // bytes, i.e. at most 2r hex digits with its <>; every other byte is copied
+    // one for one. So 2n + 1 always suffices.
+    static const char HEX[] = "0123456789ABCDEF";
+    const char *p = s, *end = s + n;
+    char *out = malloc(2 * n + 1);
+    if (!out) return NULL;
+    size_t k = 0;
+    while (p < end) {
+        if (*p == '(') {
+            const char *q = skip_literal_n(p, end);
+            size_t raw = (size_t)(q - p), bl = 0;
+            unsigned char *b = malloc(raw ? raw : 1);
+            if (!b) { free(out); return NULL; }
+            literal_bytes_core(p, q, b, raw, &bl);
+            out[k++] = '<';
+            for (size_t i = 0; i < bl; i++) { out[k++] = HEX[b[i] >> 4]; out[k++] = HEX[b[i] & 15]; }
+            out[k++] = '>';
+            free(b);
+            p = q;
+            continue;
+        }
+        if (p + 1 < end && p[0] == '<' && p[1] == '<') { out[k++] = '<'; out[k++] = '<'; p += 2; continue; }
+        if (*p == '<') {                              // hex string: copy through its '>'
+            do { out[k++] = *p ? *p : ' '; } while (++p < end && p[-1] != '>');
+            continue;
+        }
+        out[k++] = *p ? *p : ' ';                     // NUL is PDF white-space
+        p++;
+    }
+    out[k] = '\0';
+    return out;
 }
 
 /* ==========================================================================

@@ -1480,6 +1480,64 @@ pdf = pikepdf.open(sys.argv[1])
 vals = {str(f.T): str(f.get('/V', '')) for f in pdf.Root.AcroForm.Fields if '/T' in f}
 assert vals.get("FullName") == "SECOND", vals
 PY
+
+    # Binary strings written as literals with raw (unescaped) 0x00 bytes, as
+    # Acrobat does: an R6 /Encrypt dictionary whose /O and /U contain NULs used
+    # to be cut off at the first one ("could not be read", #19). The direct-
+    # objects variant also spells the ciphertext /T strings that way.
+    python3 - docs/example-form.pdf "$TMP" <<'PY' || fail "raw-NUL literals: fixture generation failed"
+import io, re, sys, pikepdf
+src, tmp = sys.argv[1], sys.argv[2]
+def raw_literal(bs):                        # escape only what a literal must
+    out = b"("
+    for c in bs:
+        if c in (0x28, 0x29, 0x5c): out += b"\\" + bytes([c])
+        elif c == 0x0d: out += b"\\r"       # a bare CR would read as LF
+        else: out += bytes([c])
+    return out + b")"
+def respell(raw, pattern):                  # same length, space padded: xref offsets hold
+    def sub(m):
+        lit = m.group(1) + raw_literal(bytes.fromhex(m.group(2).decode()))
+        assert len(lit) <= len(m.group(0))
+        return lit + b" " * (len(m.group(0)) - len(lit))
+    return re.sub(pattern, sub, raw)
+pdf = pikepdf.open(src)
+for mode, name in ((pikepdf.ObjectStreamMode.generate, "objstm"),
+                   (pikepdf.ObjectStreamMode.disable, "direct")):
+    for _ in range(3000):                   # R6 salts are random on every save
+        buf = io.BytesIO()
+        pdf.save(buf, encryption=pikepdf.Encryption(owner="", user="", R=6, aes=True),
+                 object_stream_mode=mode)
+        raw = buf.getvalue()
+        enc = {k: bytes.fromhex(v.decode()) for k, v in
+               re.findall(rb"/(O|U)\s*<([0-9a-fA-F]+)>", raw)}
+        t_nul = any(0 in bytes.fromhex(t.decode())
+                    for t in re.findall(rb"/T\s*<([0-9a-fA-F]+)>", raw))
+        if 0 in enc[b"O"] and 0 in enc[b"U"] and (name == "objstm" or t_nul):
+            break
+    else:
+        sys.exit("no R6 /O and /U (and, direct, /T) that contain a NUL")
+    raw = respell(raw, rb"(/(?:O|U|OE|UE|Perms)\s*)<([0-9a-fA-F]+)>")
+    if name == "direct":
+        raw = respell(raw, rb"(/T\s*)<([0-9a-fA-F]+)>")
+    open(f"{tmp}/enc_nul_{name}.pdf", "wb").write(raw)
+    with pikepdf.open(f"{tmp}/enc_nul_{name}.pdf") as chk:   # still valid for qpdf
+        assert len(chk.Root.AcroForm.Fields) > 0
+PY
+    plain_names=$(names docs/example-form.pdf)
+    for v in objstm direct; do
+        nul_names=$(names "$TMP/enc_nul_$v.pdf")
+        [ -n "$plain_names" ] && [ "$nul_names" = "$plain_names" ] \
+            && pass "raw-NUL literals ($v): R6 /Encrypt read, fields decrypt" \
+            || fail "raw-NUL literals ($v): fields '$nul_names'"
+        $BIN fill --strict -o "$TMP/enc_nul_${v}_f.pdf" "$TMP/enc_nul_$v.pdf" "$TMP/enc_v1.json" 2>/dev/null \
+            && python3 - "$TMP/enc_nul_${v}_f.pdf" <<'PY' && pass "raw-NUL literals ($v): fill re-opens encrypted, value round-trips" || fail "raw-NUL literals ($v): fill failed"
+import sys, pikepdf
+pdf = pikepdf.open(sys.argv[1])
+vals = {str(f.T): str(f.get('/V', '')) for f in pdf.Root.AcroForm.Fields if '/T' in f}
+assert vals.get("FullName") == "FIRST", vals
+PY
+    done
 else
     echo "  skip:  pikepdf not installed (encryption round-trip not exercised)"
 fi

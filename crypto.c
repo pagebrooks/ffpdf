@@ -463,8 +463,12 @@ static void hash_r6(const unsigned char *pw, size_t pwlen, const unsigned char *
 int pdf_crypt_init(PdfCrypt *c, const char *enc, const unsigned char *id0, size_t id0_len) {
     memset(c, 0, sizeof(*c));
     const char *p;
-    c->V = (p = dict_find(enc, "/V")) ? atoi(p) : 0;
-    c->R = (p = dict_find(enc, "/R")) ? atoi(p) : 0;
+    // Top-level entries are looked up with find_key, which skips string
+    // contents and matches whole names (so "/U" is never found inside a binary
+    // /O value or as the start of "/UE"). /Length and /CFM keep the shallow
+    // dict_find: /CFM lives in the /CF subdictionary.
+    c->V = (p = find_key(enc, "/V")) ? atoi(p) : 0;
+    c->R = (p = find_key(enc, "/R")) ? atoi(p) : 0;
     int length_bits = (p = dict_find(enc, "/Length")) ? atoi(p) : 40;
     c->key_len = length_bits / 8;
 
@@ -478,7 +482,7 @@ int pdf_crypt_init(PdfCrypt *c, const char *enc, const unsigned char *id0, size_
     }
 
     unsigned char O[48], U[48];
-    const char *po = dict_find(enc, "/O"), *pu = dict_find(enc, "/U");
+    const char *po = find_key(enc, "/O"), *pu = find_key(enc, "/U");
     if (!po || !pu) return 0;
     int olen = parse_pdf_bytes(po, O, sizeof(O));
     int ulen = parse_pdf_bytes(pu, U, sizeof(U));
@@ -492,7 +496,7 @@ int pdf_crypt_init(PdfCrypt *c, const char *enc, const unsigned char *id0, size_
         if (memcmp(test, U, 32) != 0) return 0;              // empty user pw rejected
         unsigned char ik[32];
         hash_r6((const unsigned char *)"", 0, U + 40, NULL, 0, ik);
-        const char *pue = dict_find(enc, "/UE");
+        const char *pue = find_key(enc, "/UE");
         unsigned char UE[32];
         if (!pue || parse_pdf_bytes(pue, UE, sizeof(UE)) != 32) return 0;
         unsigned char iv[16] = {0};
@@ -505,9 +509,9 @@ int pdf_crypt_init(PdfCrypt *c, const char *enc, const unsigned char *id0, size_
 
     // R2-4 (Algorithm 2), empty user password.
     int em = 1;                                              // /EncryptMetadata (default true)
-    const char *pe = dict_find(enc, "/EncryptMetadata");
+    const char *pe = find_key(enc, "/EncryptMetadata");
     if (pe && !strncmp(pe, "false", 5)) em = 0;
-    int P = (p = dict_find(enc, "/P")) ? (int)strtol(p, NULL, 10) : 0;
+    int P = (p = find_key(enc, "/P")) ? (int)strtol(p, NULL, 10) : 0;
 
     unsigned char buf[32 + 48 + 4 + 64 + 4];
     int n = 0;

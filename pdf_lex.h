@@ -34,6 +34,10 @@
 // string-aware; NULL if unbalanced.
 const char *match_dict_end(const char *start);
 
+// As match_dict_end, but bounded by `end`: a NUL byte (legal inside a literal
+// string) does not end the scan. NULL if the dict does not close before `end`.
+const char *match_dict_end_n(const char *start, const char *end);
+
 // Pointer to the value following a top-level `key` (whitespace skipped), or NULL.
 const char *find_key(const char *dict, const char *key);
 
@@ -76,6 +80,13 @@ const char *read_literal_alloc(const char *p, char **out);
 // escaped bytes, so use this wherever exact bytes matter (encryption keys,
 // ciphertext). Returns a pointer past the closing ')'.
 const char *pdf_literal_bytes(const char *p, unsigned char *out, size_t cap, size_t *len);
+
+// Copy the `n` bytes of PDF object text at `s` with every literal string
+// rewritten as the equivalent hex string ("(a\0b)" -> "<610062>"), and any NUL
+// outside a string (PDF white-space) as a space. The result is NUL-terminated
+// and holds no other NUL, so C-string scanners see the whole object even when
+// its literal strings carry raw 0x00 bytes. malloc'd; NULL on out of memory.
+char *pdf_hexify_literals(const char *s, size_t n);
 
 /* ==========================================================================
  * PDF text strings (ISO 32000-1 7.9.2.2) -> UTF-8.
