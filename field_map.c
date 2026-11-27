@@ -152,6 +152,16 @@ static char *get_compressed_object(FILE *f, XRefTable *xref, int obj_num) {
  *   - compressed objects:   resolve via the lazy object-stream cache.
  * ========================================================================== */
 
+// The start of an object's value in raw bytes "N G obj <value>": just past the
+// "obj" keyword and any whitespace. NULL if there is no "obj" keyword.
+static const char *object_value_start(const char *buf) {
+    const char *v = strstr(buf, "obj");
+    if (!v) return NULL;
+    v += 3;
+    while (*v == ' ' || *v == '\r' || *v == '\n' || *v == '\t') v++;
+    return v;
+}
+
 // Read the object at file offset `off` into a growable buffer, stopping once its
 // top-level value (a "<<...>>" dictionary or a "[...]" array) is fully present,
 // or at EOF. There is no SEEK_END/ftell: fread stops at EOF, so we never read
@@ -169,10 +179,8 @@ static char *read_object_bytes(FILE *f, long off, size_t *got_out) {
 
         // Is the object's value complete within what we've read so far?
         int complete = 1;
-        const char *v = strstr(buf, "obj");
+        const char *v = object_value_start(buf);
         if (v) {
-            v += 3;
-            while (*v == ' ' || *v == '\r' || *v == '\n' || *v == '\t') v++;
             if (v[0] == '<' && v[1] == '<')
                 complete = (match_dict_end(v) != NULL);
             else if (*v == '[')
@@ -202,8 +210,12 @@ char *get_object_raw(FILE *f, XRefTable *xref, int obj_num, int *gen_out) {
         char *buf = read_object_bytes(f, off, &got);
         if (!buf) return NULL;
 
+        // The dictionary must be the object's own value: an object whose value is
+        // an array, number, etc. has none (searching ahead would find the next
+        // object's dictionary instead).
         char *out = NULL;
-        const char *start = strstr(buf, "<<");
+        const char *start = object_value_start(buf);
+        if (start && !(start[0] == '<' && start[1] == '<')) start = NULL;
         const char *close = start ? match_dict_end(start) : NULL;
         if (close) {
             if (gen_out) {                            // "N G obj" -> generation
@@ -489,14 +501,67 @@ static void walk_fields(WalkCtx *ctx, int obj_num, const char *parent_qname,
 /* ==========================================================================
  * Locating the AcroForm and building the map.
  * ========================================================================== */
-int find_acroform_obj(FILE *f, XRefTable *xref, int root_obj) {
+// Does `v` start with an indirect reference "N G R" (R followed by a delimiter)?
+static int is_indirect_ref(const char *v) {
+    const char *p = v;
+    if (!isdigit((unsigned char)*p)) return 0;
+    while (isdigit((unsigned char)*p)) p++;
+    if (!isspace((unsigned char)*p)) return 0;
+    while (isspace((unsigned char)*p)) p++;
+    if (!isdigit((unsigned char)*p)) return 0;
+    while (isdigit((unsigned char)*p)) p++;
+    if (!isspace((unsigned char)*p)) return 0;
+    while (isspace((unsigned char)*p)) p++;
+    return *p == 'R' && (p[1] == '\0' || isspace((unsigned char)p[1]) ||
+                         strchr("/<>[]()%", p[1]) != NULL);
+}
+
+int acroform_resolve(FILE *f, XRefTable *xref, int root_obj,
+                     char **dict, int *obj_num, int *gen) {
+    *dict = NULL;
+    *obj_num = 0;
+    *gen = 0;
     char *cat = get_object_raw(f, xref, root_obj, NULL);
     if (!cat) return 0;
-    const char *ap = strstr(cat, "/AcroForm");
-    int result = 0;
-    if (ap) result = parse_ref_num(ap + 9);
+    const char *v = find_key(cat, "/AcroForm");
+    int rc = 0;
+    if (!v || !strncmp(v, "null", 4)) {
+        rc = 0;                                    // no interactive form
+    } else if (v[0] == '<' && v[1] == '<') {       // direct dictionary in the catalog
+        const char *end = match_dict_end(v);
+        if (end) {
+            size_t n = (size_t)(end - v);
+            *dict = malloc(n + 1);
+            if (*dict) { memcpy(*dict, v, n); (*dict)[n] = '\0'; rc = 1; }
+        }
+        if (rc != 1) {
+            fprintf(stderr, "ERROR: the catalog's inline /AcroForm dictionary is malformed\n");
+            rc = -1;
+        }
+    } else if (is_indirect_ref(v)) {             // indirect reference "N G R"
+        int num = 0, g = 0;
+        parse_indirect_ref(v, &num, &g);
+        char *d = num > 0 ? get_object_raw(f, xref, num, &g) : NULL;
+        const char *ds = d;
+        while (ds && isspace((unsigned char)*ds)) ds++;
+        if (ds && ds[0] == '<' && ds[1] == '<' && match_dict_end(ds)) {
+            *dict = d;
+            *obj_num = num;
+            *gen = g;
+            rc = 1;
+        } else {
+            free(d);
+            fprintf(stderr, "ERROR: the catalog's /AcroForm refers to object %d, which "
+                            "could not be read as a dictionary\n", num);
+            rc = -1;
+        }
+    } else {
+        fprintf(stderr, "ERROR: the catalog's /AcroForm entry is neither a dictionary "
+                        "nor a reference to one\n");
+        rc = -1;
+    }
     free(cat);
-    return result;
+    return rc;
 }
 
 // Resolve the /Root (catalog) object number from the trailer / xref-stream dict.
@@ -608,8 +673,13 @@ int build_field_map(FILE *f, XRefTable *xref, int root_obj, FieldMap *map) {
     if (root_obj <= 0) root_obj = find_root_obj(f);
     if (root_obj <= 0) return 0;
 
-    int acroform = find_acroform_obj(f, xref, root_obj);
-    if (acroform <= 0) return 0;
+    char *afd = NULL;
+    int af_obj = 0, af_gen = 0;
+    int found = acroform_resolve(f, xref, root_obj, &afd, &af_obj, &af_gen);
+    if (found <= 0) return found;                 // 0: no form; -1: reason on stderr
+    map->acroform_dict = afd;
+    map->acroform_obj = af_obj;
+    map->acroform_gen = af_gen;
 
     // Cycle guard sized to the highest object number in the xref table.
     int seen_max = 0;
@@ -619,15 +689,13 @@ int build_field_map(FILE *f, XRefTable *xref, int root_obj, FieldMap *map) {
 
     WalkCtx ctx = { f, xref, map, seen, seen ? seen_max : -1 };
 
-    char *afd = get_object_raw(f, xref, acroform, NULL);
-    char *arr = afd ? field_array_text(f, xref, afd, "/Fields") : NULL;
+    char *arr = field_array_text(f, xref, afd, "/Fields");
     if (arr) {
         walk_field_refs(&ctx, arr, "", 0, 0);
         free(arr);
     }
-    free(afd);
     free(seen);
-    return acroform;
+    return 1;
 }
 
 void field_map_free(FieldMap *map) {
@@ -635,4 +703,7 @@ void field_map_free(FieldMap *map) {
     free(map->items);
     map->items = NULL;
     map->count = map->cap = 0;
+    free(map->acroform_dict);
+    map->acroform_dict = NULL;
+    map->acroform_obj = map->acroform_gen = 0;
 }

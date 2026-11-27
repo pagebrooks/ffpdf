@@ -341,10 +341,7 @@ int extract_form_fields_json(FILE *f, const XRefTable *xref_table) {
         const char *nr = find_key(cat, "/NeedsRendering");
         if (nr && strncmp(nr, "true", 4) == 0) dynamic_xfa = 1;
     }
-    int acro = find_acroform_obj(f, (XRefTable *)xref_table, root);
-    char *afd = acro > 0 ? get_object_raw(f, (XRefTable *)xref_table, acro, NULL) : NULL;
-    int xfa = afd && find_key(afd, "/XFA") != NULL;
-    free(afd);
+    int xfa = map.acroform_dict && find_key(map.acroform_dict, "/XFA") != NULL;
 
     // Widget-object -> page-number map (see map_annots_to_pages).
     int pcap = 4096, nmap = 0, pageno = 0;
