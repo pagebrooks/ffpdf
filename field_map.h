@@ -33,15 +33,22 @@ typedef struct {
     FieldLoc *items;
     int count;
     int cap;
+    // The AcroForm dictionary text ("<<...>>", malloc'd) and its object number
+    // and generation. acroform_obj is 0 when the dictionary is inline in the
+    // catalog rather than an indirect object.
+    char *acroform_dict;
+    int acroform_obj;
+    int acroform_gen;
 } FieldMap;
 
 // Walk the AcroForm field tree, recording every named node. EXTENDS support must
 // already be initialised by the caller (init_form_extractor_extends_support).
 // `root_obj` is the /Root (catalog) object number, or <=0 to have it resolved
-// from the trailer. Returns the AcroForm object number (>0) on success, 0 if no
-// AcroForm/Fields were found, or -1 if the document is encrypted but cannot be
-// decrypted (the reason is printed to stderr and nothing is walked). Populates
-// `map` (free with field_map_free).
+// from the trailer. Returns 1 when the document has an AcroForm (its dictionary
+// is kept in map->acroform_dict, whether indirect or inline in the catalog), 0
+// if the catalog has no /AcroForm, or -1 if the document is encrypted but cannot
+// be decrypted or its /AcroForm entry cannot be resolved (the reason is printed
+// to stderr and nothing is walked). Populates `map` (free with field_map_free).
 int build_field_map(FILE *f, XRefTable *xref, int root_obj, FieldMap *map);
 void field_map_free(FieldMap *map);
 
@@ -60,8 +67,13 @@ int pdf_doc_id0(unsigned char *out, int cap);
 // document is not encrypted. Set up while reading; used to decrypt/encrypt.
 const PdfCrypt *pdf_doc_crypt(void);
 
-// Locate the AcroForm object number via the document catalog (Root).
-int find_acroform_obj(FILE *f, XRefTable *xref, int root_obj);
+// Resolve the catalog's /AcroForm entry, which may be an indirect reference or a
+// direct (inline) dictionary. Returns 1 and sets *dict to a malloc'd copy of the
+// dictionary text "<<...>>", with *obj_num/*gen naming its object (*obj_num is 0
+// when inline). Returns 0 if the catalog has no /AcroForm (or it is null), and -1
+// (after printing why) if the entry is present but cannot be resolved.
+int acroform_resolve(FILE *f, XRefTable *xref, int root_obj,
+                     char **dict, int *obj_num, int *gen);
 
 // Resolve the /Root (catalog) object number from the trailer. 0 if not found.
 int find_root_obj(FILE *f);

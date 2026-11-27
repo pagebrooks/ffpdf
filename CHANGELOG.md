@@ -20,6 +20,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- An `/AcroForm` written as a direct dictionary in the catalog
+  (`/AcroForm << /Fields [...] >>`, which pikepdf produces by default) is now
+  read like the usual indirect reference. Before, `fields` reported
+  `count: 0` with exit 0 and `fill` failed with "no AcroForm found". `fill`
+  moves the inline dictionary into a new object (with `/NeedAppearances`) and
+  points the catalog at it; `--flatten` removes it as before (#23).
+- A catalog whose `/AcroForm` entry is present but cannot be resolved (a
+  reference to a missing object or to something that is not a dictionary, or
+  a value that is neither) is now an error with exit 1, instead of being
+  treated as a document with no form. `/AcroForm null` still means no form.
+- Looking up an uncompressed object that is not a dictionary (an array or a
+  number, for example) no longer returns the dictionary of the object that
+  follows it in the file.
 - Comb text fields (`/Ff` Comb flag with `/MaxLen`) are now drawn one
   character per cell: the field width is split into `MaxLen` equal cells and
   each character is centered in its cell. They used to be drawn as one

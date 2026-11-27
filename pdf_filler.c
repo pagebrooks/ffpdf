@@ -1413,38 +1413,62 @@ static void emit_filled_field(FillCtx *c, FieldMap *map, FdfData *fdf, int i, Fi
     free(fodict);
 }
 
-// Rewrite the AcroForm object with /NeedAppearances true so viewers render the
-// filled values.
-static void emit_acroform_needappearances(FillCtx *c, int acroform) {
-    int af_gen = 0;
-    char *afd = get_object_raw(c->f, c->xref, acroform, &af_gen);
-    char *inner = afd ? extract_dict_inner_alloc(afd) : NULL;
-    if (inner) {
-        remove_entry(inner, "/NeedAppearances");
-        size_t ilen = strlen(inner);
-        while (ilen > 0 && isspace((unsigned char)inner[ilen - 1])) inner[--ilen] = '\0';
+// Rewrite the catalog so its /AcroForm entry refers to object `af_obj`.
+static void repoint_catalog_acroform(FillCtx *c, int root_obj, int af_obj) {
+    int rgen = 0;
+    char *cat = get_object_raw(c->f, c->xref, root_obj, &rgen);
+    char *cinner = cat ? extract_dict_inner_alloc(cat) : NULL;
+    if (cinner) {
+        remove_entry(cinner, "/AcroForm");
+        size_t ln = strlen(cinner);
+        while (ln > 0 && isspace((unsigned char)cinner[ln - 1])) cinner[--ln] = '\0';
+        Buf cb = {0};
+        buf_puts(&cb, cinner);
+        buf_printf(&cb, "/AcroForm %d 0 R", af_obj);
         long off = c->base_len + (long)c->o.len;
-        Buf ab = {0};
-        buf_puts(&ab, inner);
-        buf_puts(&ab, "/NeedAppearances true");
-        emit_dict_object(&c->o, c->crypt, acroform, af_gen, (const char *)ab.data);
-        free(ab.data);
-        fill_record(c, acroform, off, af_gen);
+        emit_dict_object(&c->o, c->crypt, root_obj, rgen, (const char *)cb.data);
+        fill_record(c, root_obj, off, rgen);
+        free(cb.data);
     } else {
-        fprintf(stderr, "WARNING: AcroForm dictionary malformed; /NeedAppearances not set "
+        fprintf(stderr, "WARNING: catalog dictionary malformed; /NeedAppearances not set "
                         "(field values may not render until edited)\n");
     }
+    free(cinner);
+    free(cat);
+}
+
+// Rewrite the AcroForm with /NeedAppearances true so viewers render the filled
+// values. An AcroForm that is an inline dictionary in the catalog is promoted to
+// a new indirect object, and the catalog is rewritten to refer to it.
+static void emit_acroform_needappearances(FillCtx *c, const FieldMap *map, int root_obj) {
+    char *inner = extract_dict_inner_alloc(map->acroform_dict);
+    if (!inner) {
+        fprintf(stderr, "WARNING: AcroForm dictionary malformed; /NeedAppearances not set "
+                        "(field values may not render until edited)\n");
+        return;
+    }
+    remove_entry(inner, "/NeedAppearances");
+    size_t ilen = strlen(inner);
+    while (ilen > 0 && isspace((unsigned char)inner[ilen - 1])) inner[--ilen] = '\0';
+    int inline_af = map->acroform_obj <= 0;
+    int obj = inline_af ? c->next_obj++ : map->acroform_obj;
+    int gen = inline_af ? 0 : map->acroform_gen;
+    long off = c->base_len + (long)c->o.len;
+    Buf ab = {0};
+    buf_puts(&ab, inner);
+    buf_puts(&ab, "/NeedAppearances true");
+    emit_dict_object(&c->o, c->crypt, obj, gen, (const char *)ab.data);
+    fill_record(c, obj, off, gen);
+    free(ab.data);
     free(inner);
-    free(afd);
+    if (inline_af) repoint_catalog_acroform(c, root_obj, obj);
 }
 
 // Sync the XFA datasets packet (dynamic-XFA forms render from it, not the
 // AcroForm) and append the rewritten datasets stream.
-static void sync_xfa_datasets(FillCtx *c, FdfData *fdf, FieldMap *map, int acroform) {
-    char *afd = get_object_raw(c->f, c->xref, acroform, NULL);
-    int ds_obj = afd ? find_xfa_datasets(afd) : 0;
-    free(afd);
-    if (ds_obj <= 0 || ds_obj == acroform) return;
+static void sync_xfa_datasets(FillCtx *c, FdfData *fdf, FieldMap *map) {
+    int ds_obj = find_xfa_datasets(map->acroform_dict);
+    if (ds_obj <= 0 || ds_obj == map->acroform_obj) return;
 
     char *xml = load_datasets_xml(c->f, c->xref, ds_obj);
     if (!xml) return;
@@ -1850,13 +1874,18 @@ static int fill_core(const char *pdf_filename, FdfData *fdf,
     // Build the shared field map. Field objects inside compressed object streams
     // are resolved lazily by get_object_raw (only the needed streams are ever
     // decompressed); objstm_cache_reset() frees that cache at cleanup.
-    int acroform = build_field_map(f, &xref, root, &map);
-    if (acroform < 0) goto cleanup;                   // undecryptable; reason on stderr
-    if (acroform == 0) {
+    int found = build_field_map(f, &xref, root, &map);
+    if (found < 0) goto cleanup;                      // reason on stderr
+    if (found == 0) {
         fprintf(stderr, "ERROR: no AcroForm found in document catalog\n");
         goto cleanup;
     }
-    fprintf(stderr, "AcroForm is object %d; Root %d, Info %d, Size %d\n", acroform, root, info, size);
+    if (map.acroform_obj > 0)
+        fprintf(stderr, "AcroForm is object %d; Root %d, Info %d, Size %d\n",
+                map.acroform_obj, root, info, size);
+    else
+        fprintf(stderr, "AcroForm is inline in the catalog; Root %d, Info %d, Size %d\n",
+                root, info, size);
     fprintf(stderr, "Discovered %d named field node(s) in the form\n", map.count);
 
     // Assemble the incremental update in `ctx` (appended bytes + xref rows).
@@ -1886,10 +1915,8 @@ static int fill_core(const char *pdf_filename, FdfData *fdf,
 
     // AcroForm /DA is inherited by fields lacking their own.
     {
-        char *afd = get_object_raw(f, &xref, acroform, NULL);
-        const char *d = afd ? find_key(afd, "/DA") : NULL;
+        const char *d = find_key(map.acroform_dict, "/DA");
         if (d && *d == '(') read_literal(d, ctx.af_da, sizeof(ctx.af_da));
-        free(afd);
     }
 
     // Encryption: carried into the new trailer; ctx.crypt re-encrypts appended objects.
@@ -1920,8 +1947,8 @@ static int fill_core(const char *pdf_filename, FdfData *fdf,
     if (ctx.flatten) {
         flatten_form(&ctx, root);                  // bake appearances, remove the form
     } else {
-        emit_acroform_needappearances(&ctx, acroform);
-        sync_xfa_datasets(&ctx, fdf, &map, acroform);
+        emit_acroform_needappearances(&ctx, &map, root);
+        sync_xfa_datasets(&ctx, fdf, &map);
     }
 
     // Nothing in the input matched a form field: a no-op fill is a failure, not

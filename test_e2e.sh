@@ -477,6 +477,84 @@ printf '%%FDF-1.2\n1 0 obj\n<< /FDF << /Fields [ << /T (myfield) /V (INDIRECT_OK
 $BIN fill "$TMP/ind.fdf" "$TMP/indirect.pdf" 2>/dev/null | grep -qa 'INDIRECT_OK' \
     && pass "indirect: fill fills the field" || fail "indirect: fill failed"
 
+echo "== inline /AcroForm dictionary in the catalog =="
+# /AcroForm may be a direct dictionary instead of a reference (pikepdf writes it
+# that way). It must be read like the indirect form; fill promotes it to a new
+# object and repoints the catalog; an entry that can't be resolved is an error.
+mkaf() { # $1=out $2=/AcroForm value written into the catalog
+python3 - "$1" "$2" <<'PY'
+import sys
+af = sys.argv[2].encode()
+objs = {
+ 1: b"<</Type/Catalog/Pages 2 0 R/AcroForm " + af + b">>",
+ 2: b"<</Type/Pages/Kids[3 0 R]/Count 1>>",
+ 3: b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 200]/Annots[5 0 R]>>",
+ 4: b"[5 0 R]",
+ 5: b"<</FT/Tx/T(name)/Type/Annot/Subtype/Widget/Rect[10 100 200 130]/P 3 0 R>>",
+ 6: b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica/Name/Helv>>",
+}
+o = bytearray(b"%PDF-1.7\n"); off = {}
+for n in sorted(objs):
+    off[n] = len(o); o += b"%d 0 obj\n" % n + objs[n] + b"\nendobj\n"
+x = len(o)
+o += b"xref\n0 7\n0000000000 65535 f \n"
+o += b"".join(b"%010d 00000 n \n" % off[n] for n in range(1, 7))
+o += b"trailer\n<</Size 7/Root 1 0 R>>\nstartxref\n%d\n%%%%EOF\n" % x
+open(sys.argv[1], "wb").write(o)
+PY
+}
+mkaf "$TMP/afin.pdf" "<</Fields[5 0 R]/DA(/Helv 12 Tf 0 g)/DR<</Font<</Helv 6 0 R>>>>>>"
+$BIN fields "$TMP/afin.pdf" 2>/dev/null > "$TMP/afin.json"; ec=$?
+python3 - "$TMP/afin.json" <<'PY' && [ "$ec" -eq 0 ] && pass "inline AcroForm: fields lists the field" || fail "inline AcroForm: fields wrong"
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d["count"] == 1 and d["fields"][0]["name"] == "name", d
+PY
+$BIN fdf-extract "$TMP/afin.pdf" 2>/dev/null | grep -q '^/T (name)' \
+    && pass "inline AcroForm: fdf-extract finds the field" || fail "inline AcroForm: fdf-extract empty"
+printf '{"name":"Inline Value"}' > "$TMP/afin_v.json"
+$BIN fill --strict -o "$TMP/afin_o.pdf" "$TMP/afin.pdf" "$TMP/afin_v.json" 2>/dev/null; ec=$?
+python3 - "$TMP/afin_o.pdf" <<'PY' && [ "$ec" -eq 0 ] && pass "inline AcroForm: fill promotes it to an object + repoints catalog" || fail "inline AcroForm: fill wrong"
+import sys, re
+d = open(sys.argv[1], "rb").read()
+cat = re.findall(rb"\n1 0 obj\n(<<.*?>>)\nendobj", d, re.S)[-1]   # newest catalog
+m = re.search(rb"/AcroForm (\d+) 0 R", cat)
+assert m and b"<<" not in cat[2:], cat                  # a reference, no inline dict left
+af = re.findall(rb"\n%s 0 obj\n(<<.*?>>)\nendobj" % m.group(1), d, re.S)[-1]
+assert b"/Fields[5 0 R]" in af and b"/DR" in af and b"/NeedAppearances true" in af, af
+assert b"(Inline Value)" in d
+PY
+if python3 -c 'import pikepdf' 2>/dev/null; then
+    python3 - "$TMP/afin_o.pdf" <<'PY' && pass "inline AcroForm: filled output re-opens in pikepdf" || fail "inline AcroForm: output invalid"
+import sys, pikepdf
+with pikepdf.open(sys.argv[1]) as p:
+    af = p.Root.AcroForm
+    assert af.is_indirect and bool(af.NeedAppearances)
+    assert str(af.Fields[0].V) == "Inline Value"
+PY
+fi
+$BIN fill --flatten -o "$TMP/afin_f.pdf" "$TMP/afin.pdf" "$TMP/afin_v.json" 2>/dev/null
+python3 - "$TMP/afin_f.pdf" <<'PY' && pass "inline AcroForm: flatten removes it from the catalog" || fail "inline AcroForm: flatten wrong"
+import sys, re
+d = open(sys.argv[1], "rb").read()
+cat = re.findall(rb"\n1 0 obj\n(<<.*?>>)\nendobj", d, re.S)[-1]
+assert b"/AcroForm" not in cat and b"/Pages 2 0 R" in cat, cat
+PY
+# /AcroForm null means no form: an empty listing, not an error.
+mkaf "$TMP/afnull.pdf" "null"
+$BIN fields "$TMP/afnull.pdf" 2>/dev/null | grep -q '"count": 0' \
+    && pass "/AcroForm null: no form, exit 0" || fail "/AcroForm null mishandled"
+# Present but unresolvable: a loud error (exit 1), never a silent count of 0.
+for c in "dangling:99 0 R" "notaref:5" "notadict:4 0 R"; do
+    label=${c%%:*}; mkaf "$TMP/af_$label.pdf" "${c#*:}"
+    $BIN fields "$TMP/af_$label.pdf" > "$TMP/af_out" 2>"$TMP/af_err"; ec=$?
+    [ "$ec" -eq 1 ] && grep -q "ERROR: .*AcroForm" "$TMP/af_err" && [ ! -s "$TMP/af_out" ] \
+        && pass "/AcroForm $label: fields exits 1 with an error" || fail "/AcroForm $label: not an error (exit $ec)"
+done
+$BIN fill -o "$TMP/af_never.pdf" "$TMP/af_dangling.pdf" "$TMP/afin_v.json" 2>"$TMP/af_err"; ec=$?
+[ "$ec" -eq 1 ] && grep -q "refers to object 99" "$TMP/af_err" && [ ! -e "$TMP/af_never.pdf" ] \
+    && pass "/AcroForm dangling: fill exits 1 with the reason" || fail "/AcroForm dangling: fill exit $ec"
+
 echo "== non-ASCII field value =="
 # A UTF-8 value with accents, CJK and an astral-plane emoji must be written as a
 # UTF-16BE hex string (<FEFF...>) so viewers render it, not as raw literal bytes

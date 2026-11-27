@@ -390,6 +390,19 @@ static void test_std14_width(void) {
     CHECK(std14_width("Helvetica", '\n') == 0);            // control code
 }
 
+// /AcroForm (and similar) values: only a real "N G R" counts as a reference.
+static void test_is_indirect_ref(void) {
+    CHECK(is_indirect_ref("12 0 R"));
+    CHECK(is_indirect_ref("12 0 R>>"));
+    CHECK(is_indirect_ref("12\n0\nR/Type"));
+    CHECK(!is_indirect_ref("5"));
+    CHECK(!is_indirect_ref("5>>"));
+    CHECK(!is_indirect_ref("5 0"));
+    CHECK(!is_indirect_ref("5 0 RG"));
+    CHECK(!is_indirect_ref("<</Fields[]>>"));
+    CHECK(!is_indirect_ref("null"));
+}
+
 int main(void) {
     test_find_key();
     test_crypto();
@@ -405,6 +418,7 @@ int main(void) {
     test_skip_value();
     test_field_array_text_inline();
     test_xfa_datasets_set();
+    test_is_indirect_ref();
     test_std14_width();
 
     printf("%d checks, %d failures\n", g_checks, g_fails);
